@@ -13,6 +13,30 @@ const VITIBET_URL = "https://www.vitibet.com/index.php?clanek=quicktips&sekce=fo
 
 const TTL_TODAY_MS = 1000 * 60 * 20;
 const TTL_MATCH_DETAILS_MS = 1000 * 60 * 10;
+const PAIR_SUGGESTIONS_KEY = "scrape:combined:pair-suggestions";
+const PAIR_OVERRIDES_KEY = "scrape:combined:pair-overrides";
+const MATCH_HIGH_CONFIDENCE = 0.72;
+const MATCH_SUGGESTION_MIN = 0.55;
+
+export type PairSuggestion = {
+  source: "olbg" | "vitibet";
+  candidateId: string;
+  candidateHomeTeam: string;
+  candidateAwayTeam: string;
+  candidateKickoffTime?: string;
+  targetId: string;
+  targetHomeTeam: string;
+  targetAwayTeam: string;
+  targetKickoffTime?: string;
+  score: number;
+};
+
+type PairOverride = {
+  source: "olbg" | "vitibet";
+  candidateId: string;
+  targetId: string;
+  approvedAt: string;
+};
 
 function normalizeMatchId(homeTeam: string, awayTeam: string) {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -35,6 +59,163 @@ function parsePercentTriplet(value: string) {
     draw: Number(matches[1] ?? 0),
     away: Number(matches[2] ?? 0),
   };
+}
+
+function extractKickoffTime(value: string): string | undefined {
+  return value.match(/\b\d{1,2}:\d{2}\b/)?.[0];
+}
+
+function extractLeagueHint(value: string): string | undefined {
+  const knownLeagues = [
+    "Premier League",
+    "La Liga",
+    "Serie A",
+    "Bundesliga",
+    "Ligue 1",
+    "Championship",
+    "Eredivisie",
+    "Veikkausliiga",
+    "MLS",
+  ];
+
+  const found = knownLeagues.find((league) => new RegExp(`\\b${league}\\b`, "i").test(value));
+  return found;
+}
+
+// MATCH PAIRING HELPER:
+// Attempts to join source rows to the same real-world game even when team IDs differ.
+// Uses weighted similarity over team names, kickoff time proximity and league hint.
+function normalizeTeamLabel(value: string) {
+  const withoutDiacritics = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ");
+
+  return withoutDiacritics
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !["fc", "cf", "ac", "sc", "fk", "afc", "club", "the"].includes(token));
+}
+
+function tokenSimilarity(a: string, b: string) {
+  if (!a || !b) return 0;
+  const aNorm = normalizeTeamLabel(a);
+  const bNorm = normalizeTeamLabel(b);
+  if (!aNorm.length || !bNorm.length) return 0;
+
+  const aJoined = aNorm.join(" ");
+  const bJoined = bNorm.join(" ");
+  if (aJoined === bJoined) return 1;
+  if (aJoined.includes(bJoined) || bJoined.includes(aJoined)) return 0.85;
+
+  const aSet = new Set(aNorm);
+  const bSet = new Set(bNorm);
+  const intersection = [...aSet].filter((v) => bSet.has(v)).length;
+  const union = new Set([...aSet, ...bSet]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+function parseKickoffMinutes(value?: string) {
+  if (!value) return null;
+  const match = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
+function kickoffSimilarity(a?: string, b?: string) {
+  const aMin = parseKickoffMinutes(a);
+  const bMin = parseKickoffMinutes(b);
+  if (aMin === null || bMin === null) return 0.1;
+
+  const diff = Math.abs(aMin - bMin);
+  if (diff <= 10) return 1;
+  if (diff <= 30) return 0.8;
+  if (diff <= 60) return 0.6;
+  if (diff <= 120) return 0.3;
+  return 0;
+}
+
+function leagueSimilarity(a?: string, b?: string) {
+  if (!a || !b) return 0.05;
+  const aNorm = a.toLowerCase();
+  const bNorm = b.toLowerCase();
+  if (aNorm === bNorm) return 1;
+  if (aNorm.includes(bNorm) || bNorm.includes(aNorm)) return 0.7;
+  return 0;
+}
+
+function matchPairScore(
+  left: { homeTeam: string; awayTeam: string; kickoffTime?: string; league?: string },
+  right: { homeTeam: string; awayTeam: string; kickoffTime?: string; league?: string },
+) {
+  const directTeamScore =
+    (tokenSimilarity(left.homeTeam, right.homeTeam) + tokenSimilarity(left.awayTeam, right.awayTeam)) / 2;
+  const swappedTeamScore =
+    (tokenSimilarity(left.homeTeam, right.awayTeam) + tokenSimilarity(left.awayTeam, right.homeTeam)) / 2 - 0.15;
+
+  const teamScore = Math.max(directTeamScore, swappedTeamScore);
+  const timeScore = kickoffSimilarity(left.kickoffTime, right.kickoffTime);
+  const leagueScore = leagueSimilarity(left.league, right.league);
+
+  return teamScore * 0.78 + timeScore * 0.17 + leagueScore * 0.05;
+}
+
+function findBestCombinedCandidate(
+  byId: Record<string, CombinedMatch>,
+  incoming: { homeTeam: string; awayTeam: string; kickoffTime?: string; league?: string },
+) {
+  let bestKey: string | null = null;
+  let bestScore = 0;
+
+  Object.entries(byId).forEach(([key, existing]) => {
+    const score = matchPairScore(existing, incoming);
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+    }
+  });
+
+  return { key: bestKey, score: bestScore };
+}
+
+function getPairOverrides() {
+  return getFromCache<PairOverride[]>(PAIR_OVERRIDES_KEY) ?? [];
+}
+
+function setPairSuggestions(suggestions: PairSuggestion[]) {
+  setToCache(PAIR_SUGGESTIONS_KEY, suggestions, TTL_TODAY_MS);
+}
+
+function applyPairOverride(
+  source: "olbg" | "vitibet",
+  candidateId: string,
+  fallbackId: string,
+  overridesMap: Map<string, string>,
+) {
+  return overridesMap.get(`${source}:${candidateId}`) ?? fallbackId;
+}
+
+export function getPairSuggestions(): PairSuggestion[] {
+  return getFromCache<PairSuggestion[]>(PAIR_SUGGESTIONS_KEY) ?? [];
+}
+
+export function approvePairSuggestion(source: "olbg" | "vitibet", candidateId: string, targetId: string) {
+  const current = getPairOverrides();
+  const key = `${source}:${candidateId}`;
+  const next = [
+    ...current.filter((item) => `${item.source}:${item.candidateId}` !== key),
+    {
+      source,
+      candidateId,
+      targetId,
+      approvedAt: new Date().toISOString(),
+    },
+  ];
+  setToCache(PAIR_OVERRIDES_KEY, next, 1000 * 60 * 60 * 24 * 30);
 }
 
 function fallbackForebetToday(): ForebetTodayMatch[] {
@@ -251,6 +432,8 @@ export async function scrapeOlbgToday(): Promise<OlbgTodayTip[]> {
         const homeTeam = cleanText(teams[1]);
         const awayTeam = cleanText(teams[2]);
         const id = normalizeMatchId(homeTeam, awayTeam);
+        const kickoffTime = extractKickoffTime(plain);
+        const league = extractLeagueHint(plain);
         const stars = Math.min(5, Math.max(0, extractNumber(plain.match(/\d\s*stars?/i)?.[0] ?? "0")));
         const bettorCount = extractNumber(plain.match(/\d+\s*(users|bettors|tips)/i)?.[0] ?? "0");
         const confidencePct = Math.min(100, extractNumber(plain.match(/\d{1,3}%/)?.[0] ?? "0"));
@@ -265,6 +448,8 @@ export async function scrapeOlbgToday(): Promise<OlbgTodayTip[]> {
           confidencePct,
           source: "olbg" as const,
           scrapedAt,
+          ...(kickoffTime ? { kickoffTime } : {}),
+          ...(league ? { league } : {}),
         };
       })
       .filter((item): item is OlbgTodayTip => Boolean(item));
@@ -303,6 +488,8 @@ export async function scrapeVitibetToday(): Promise<VitibetTodayTip[]> {
         const homeTeam = cleanText(teams[1]);
         const awayTeam = cleanText(teams[2]);
         const id = normalizeMatchId(homeTeam, awayTeam);
+        const kickoffTime = extractKickoffTime(plain);
+        const league = extractLeagueHint(plain);
         const percentages = parsePercentTriplet(plain);
         const riskLevel: VitibetTodayTip["riskLevel"] = /low/i.test(plain)
           ? "low"
@@ -322,6 +509,8 @@ export async function scrapeVitibetToday(): Promise<VitibetTodayTip[]> {
           riskLevel,
           source: "vitibet" as const,
           scrapedAt,
+          ...(kickoffTime ? { kickoffTime } : {}),
+          ...(league ? { league } : {}),
           ...(possibleScore ? { possibleScore } : {}),
         };
       })
@@ -338,7 +527,14 @@ export async function scrapeVitibetToday(): Promise<VitibetTodayTip[]> {
 }
 
 export async function scrapeCombinedMatches(): Promise<CombinedMatch[]> {
-  const key = "scrape:combined:today";
+  const overrides = getPairOverrides();
+  const overridesMap = new Map(overrides.map((item) => [`${item.source}:${item.candidateId}`, item.targetId]));
+  const overrideVersion =
+    overrides
+      .map((item) => `${item.source}:${item.candidateId}->${item.targetId}`)
+      .sort()
+      .join("|") || "none";
+  const key = `scrape:combined:today:${overrideVersion}`;
   const cached = getFromCache<CombinedMatch[]>(key);
   if (cached) return cached;
 
@@ -349,6 +545,7 @@ export async function scrapeCombinedMatches(): Promise<CombinedMatch[]> {
   ]);
 
   const byId: Record<string, CombinedMatch> = {};
+  const suggestions: PairSuggestion[] = [];
 
   forebet.forEach((item) => {
     byId[item.id] = {
@@ -361,12 +558,36 @@ export async function scrapeCombinedMatches(): Promise<CombinedMatch[]> {
   });
 
   olbg.forEach((item) => {
-    const existing = byId[item.id];
-    byId[item.id] = {
-      id: item.id,
+    const overriddenId = applyPairOverride("olbg", item.id, item.id, overridesMap);
+    const candidate = findBestCombinedCandidate(byId, item);
+    const matchedId =
+      byId[overriddenId] || overriddenId !== item.id
+        ? overriddenId
+        : candidate.key && candidate.score >= MATCH_HIGH_CONFIDENCE
+          ? candidate.key
+          : item.id;
+
+    if (!byId[overriddenId] && overriddenId === item.id && candidate.key && candidate.score >= MATCH_SUGGESTION_MIN) {
+      suggestions.push({
+        source: "olbg",
+        candidateId: item.id,
+        candidateHomeTeam: item.homeTeam,
+        candidateAwayTeam: item.awayTeam,
+        candidateKickoffTime: item.kickoffTime,
+        targetId: candidate.key,
+        targetHomeTeam: byId[candidate.key].homeTeam,
+        targetAwayTeam: byId[candidate.key].awayTeam,
+        targetKickoffTime: byId[candidate.key].kickoffTime,
+        score: Number(candidate.score.toFixed(3)),
+      });
+    }
+
+    const existing = byId[matchedId];
+    byId[matchedId] = {
+      id: matchedId,
       homeTeam: existing?.homeTeam ?? item.homeTeam,
       awayTeam: existing?.awayTeam ?? item.awayTeam,
-      kickoffTime: existing?.kickoffTime,
+      kickoffTime: existing?.kickoffTime ?? item.kickoffTime,
       forebet: existing?.forebet,
       olbg: item,
       vitibet: existing?.vitibet,
@@ -374,12 +595,36 @@ export async function scrapeCombinedMatches(): Promise<CombinedMatch[]> {
   });
 
   vitibet.forEach((item) => {
-    const existing = byId[item.id];
-    byId[item.id] = {
-      id: item.id,
+    const overriddenId = applyPairOverride("vitibet", item.id, item.id, overridesMap);
+    const candidate = findBestCombinedCandidate(byId, item);
+    const matchedId =
+      byId[overriddenId] || overriddenId !== item.id
+        ? overriddenId
+        : candidate.key && candidate.score >= MATCH_HIGH_CONFIDENCE
+          ? candidate.key
+          : item.id;
+
+    if (!byId[overriddenId] && overriddenId === item.id && candidate.key && candidate.score >= MATCH_SUGGESTION_MIN) {
+      suggestions.push({
+        source: "vitibet",
+        candidateId: item.id,
+        candidateHomeTeam: item.homeTeam,
+        candidateAwayTeam: item.awayTeam,
+        candidateKickoffTime: item.kickoffTime,
+        targetId: candidate.key,
+        targetHomeTeam: byId[candidate.key].homeTeam,
+        targetAwayTeam: byId[candidate.key].awayTeam,
+        targetKickoffTime: byId[candidate.key].kickoffTime,
+        score: Number(candidate.score.toFixed(3)),
+      });
+    }
+
+    const existing = byId[matchedId];
+    byId[matchedId] = {
+      id: matchedId,
       homeTeam: existing?.homeTeam ?? item.homeTeam,
       awayTeam: existing?.awayTeam ?? item.awayTeam,
-      kickoffTime: existing?.kickoffTime,
+      kickoffTime: existing?.kickoffTime ?? item.kickoffTime,
       forebet: existing?.forebet,
       olbg: existing?.olbg,
       vitibet: item,
@@ -387,6 +632,7 @@ export async function scrapeCombinedMatches(): Promise<CombinedMatch[]> {
   });
 
   const result = Object.values(byId);
+  setPairSuggestions(suggestions);
   setToCache(key, result, TTL_TODAY_MS);
   return result;
 }

@@ -125,3 +125,16 @@ export type BetSlip = {
   name: string;
   selections: BetSelection[];
 };
+
+export type PairSuggestion = {
+  source: "olbg" | "vitibet";
+  candidateId: string;
+  candidateHomeTeam: string;
+  candidateAwayTeam: string;
+  candidateKickoffTime?: string;
+  targetId: string;
+  targetHomeTeam: string;
+  targetAwayTeam: string;
+  targetKickoffTime?: string;
+  score: number;
+};

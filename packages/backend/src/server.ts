@@ -6,6 +6,8 @@ import { DB } from "./db";
 import { reviewMatchAI } from "./ai";
 import type { MatchView } from "./types";
 import {
+  approvePairSuggestion,
+  getPairSuggestions,
   scrapeCombinedMatches,
   scrapeForebetMatchDetails,
   scrapeForebetToday,
@@ -329,6 +331,27 @@ app.get("/api/matches/combined", async (_req: Request, res: Response) => {
     };
   });
   res.json(normalized);
+});
+
+app.get("/api/matches/pair-suggestions", async (_req: Request, res: Response) => {
+  await scrapeCombinedMatches();
+  res.json(getPairSuggestions());
+});
+
+app.post("/api/matches/pair-suggestions/approve", async (req: Request, res: Response) => {
+  const body = req.body as { source?: "olbg" | "vitibet"; candidateId?: string; targetId?: string };
+  const source = body.source;
+  const candidateId = body.candidateId?.trim();
+  const targetId = body.targetId?.trim();
+
+  if (!source || !candidateId || !targetId) {
+    return res.status(400).json({ error: "source, candidateId and targetId are required" });
+  }
+
+  approvePairSuggestion(source, candidateId, targetId);
+  await scrapeCombinedMatches();
+
+  return res.json({ ok: true });
 });
 
 process.on("SIGTERM", () => {

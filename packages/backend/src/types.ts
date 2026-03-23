@@ -94,6 +94,8 @@ export type OlbgTodayTip = {
   id: string;
   homeTeam: string;
   awayTeam: string;
+  kickoffTime?: string;
+  league?: string;
   stars: number;
   bettorCount: number;
   popularPick: string;
@@ -106,6 +108,8 @@ export type VitibetTodayTip = {
   id: string;
   homeTeam: string;
   awayTeam: string;
+  kickoffTime?: string;
+  league?: string;
   percentages: {
     home: number;
     draw: number;

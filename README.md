@@ -66,6 +66,7 @@ Workflows:
 - Azure Container Registry for images
 - Terraform modules for infra provisioning
 - Azure Storage for Terraform state
+- Step-by-step setup checklist: [Infrastructure Details](docs/infra.md)
 
 ## Security
 

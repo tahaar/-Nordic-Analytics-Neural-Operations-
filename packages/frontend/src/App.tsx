@@ -17,17 +17,20 @@ import {
 } from "@mui/material";
 import {
   AutoAwesome,
+  Hub,
   Psychology,
+  Refresh,
   RocketLaunch,
   Search,
   Send,
   SmartToy,
+  TaskAlt,
   TravelExplore,
 } from "@mui/icons-material";
 import { MatchRow } from "./components/MatchRow";
 import { useBetslips } from "./hooks/useBetslips";
 import { usePinned } from "./hooks/usePinned";
-import type { ApiCombinedMatch, CombinedMatchRow, ForebetMatchStats, Tip } from "./types";
+import type { ApiCombinedMatch, CombinedMatchRow, ForebetMatchStats, PairSuggestion, Tip } from "./types";
 
 type BotChoice = "general-free" | "football-analyst" | "sharp-scout";
 type ChatMessage = {
@@ -37,6 +40,9 @@ type ChatMessage = {
   bot: BotChoice;
   createdAt: string;
 };
+
+type MatchFilterMode = "all" | "with-vitibet" | "only-olbg" | "only-forebet";
+type MatchSortMode = "pinned-first" | "kickoff-asc" | "home-team-asc" | "olbg-stars-desc" | "sources-desc";
 
 const BOT_LABELS: Record<BotChoice, string> = {
   "general-free": "General Free Bot",
@@ -135,6 +141,23 @@ function normalizeCombined(rows: ApiCombinedMatch[]): CombinedMatchRow[] {
   });
 }
 
+function kickoffToMinutes(value: string) {
+  const match = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return Number.MAX_SAFE_INTEGER;
+  return hours * 60 + minutes;
+}
+
+function sourceCount(row: CombinedMatchRow) {
+  let count = 0;
+  if (row.forebet) count += 1;
+  if (row.olbg) count += 1;
+  if (row.vitibet) count += 1;
+  return count;
+}
+
 export function App() {
   const [matches, setMatches] = useState<CombinedMatchRow[]>([]);
   const [tab, setTab] = useState(0);
@@ -148,6 +171,13 @@ export function App() {
   const [siteSearchLoading, setSiteSearchLoading] = useState(false);
   const [siteSearchSummary, setSiteSearchSummary] = useState<string | null>(null);
   const [siteSearchError, setSiteSearchError] = useState<string | null>(null);
+  const [pairReviewOpen, setPairReviewOpen] = useState(false);
+  const [pairSuggestions, setPairSuggestions] = useState<PairSuggestion[]>([]);
+  const [pairLoading, setPairLoading] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const [approvingPairs, setApprovingPairs] = useState<Record<string, boolean>>({});
+  const [matchFilter, setMatchFilter] = useState<MatchFilterMode>("all");
+  const [matchSort, setMatchSort] = useState<MatchSortMode>("pinned-first");
   const { pinned, toggle } = usePinned();
   const { slips, addSlip, duplicateSlip, addSelectionToSlip, moveSelection, removeSelection } = useBetslips();
 
@@ -167,11 +197,41 @@ export function App() {
     void load();
   }, []);
 
-  const sortedMatches = useMemo(() => {
-    const pinnedRows = matches.filter((m) => pinned.includes(m.matchKey));
-    const normalRows = matches.filter((m) => !pinned.includes(m.matchKey));
-    return [...pinnedRows, ...normalRows];
-  }, [matches, pinned]);
+  const arrangedMatches = useMemo(() => {
+    const filtered = matches.filter((m) => {
+      if (matchFilter === "with-vitibet") return Boolean(m.vitibet);
+      if (matchFilter === "only-olbg") return Boolean(m.olbg) && !m.forebet && !m.vitibet;
+      if (matchFilter === "only-forebet") return Boolean(m.forebet) && !m.olbg && !m.vitibet;
+      return true;
+    });
+
+    const rows = [...filtered];
+
+    rows.sort((a, b) => {
+      if (matchSort === "kickoff-asc") {
+        return kickoffToMinutes(a.kickoff) - kickoffToMinutes(b.kickoff);
+      }
+
+      if (matchSort === "home-team-asc") {
+        return a.homeTeam.localeCompare(b.homeTeam);
+      }
+
+      if (matchSort === "olbg-stars-desc") {
+        return (b.olbg?.stars ?? -1) - (a.olbg?.stars ?? -1);
+      }
+
+      if (matchSort === "sources-desc") {
+        return sourceCount(b) - sourceCount(a);
+      }
+
+      const aPinned = pinned.includes(a.matchKey) ? 1 : 0;
+      const bPinned = pinned.includes(b.matchKey) ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+      return a.homeTeam.localeCompare(b.homeTeam);
+    });
+
+    return rows;
+  }, [matches, pinned, matchFilter, matchSort]);
 
   const ensureFirstSlipAndAdd = (row: CombinedMatchRow) => {
     if (slips.length === 0) {
@@ -223,7 +283,8 @@ export function App() {
     }
   };
 
-  const visibleMatches = tab === 0 ? sortedMatches : sortedMatches.filter((m) => pinned.includes(m.matchKey));
+  const visibleMatches =
+    tab === 0 ? arrangedMatches : arrangedMatches.filter((m) => pinned.includes(m.matchKey));
 
   const sendBotMessage = async () => {
     const text = chatInput.trim();
@@ -312,6 +373,52 @@ export function App() {
     }
   };
 
+  const loadPairSuggestions = async () => {
+    setPairError(null);
+    setPairLoading(true);
+
+    try {
+      const r = await fetch("/api/matches/pair-suggestions");
+      if (!r.ok) throw new Error("Failed to load pair suggestions");
+      const data = (await r.json()) as PairSuggestion[];
+      setPairSuggestions(data);
+    } catch {
+      setPairError("Could not load pair suggestions.");
+    } finally {
+      setPairLoading(false);
+    }
+  };
+
+  const approvePair = async (item: PairSuggestion) => {
+    const key = `${item.source}:${item.candidateId}`;
+    setApprovingPairs((prev) => ({ ...prev, [key]: true }));
+
+    try {
+      const r = await fetch("/api/matches/pair-suggestions/approve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source: item.source,
+          candidateId: item.candidateId,
+          targetId: item.targetId,
+        }),
+      });
+      if (!r.ok) throw new Error("approve failed");
+
+      setPairSuggestions((prev) => prev.filter((s) => !(s.source === item.source && s.candidateId === item.candidateId)));
+
+      const combinedRes = await fetch("/api/matches/combined");
+      if (combinedRes.ok) {
+        const refreshed = (await combinedRes.json()) as ApiCombinedMatch[];
+        setMatches(normalizeCombined(refreshed));
+      }
+    } catch {
+      setPairError("Could not approve pair. Try again.");
+    } finally {
+      setApprovingPairs((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Paper
@@ -356,6 +463,19 @@ export function App() {
             >
               {botOpen ? "Hide bot" : "Open bot"}
             </Button>
+            <Button
+              variant={pairReviewOpen ? "contained" : "outlined"}
+              startIcon={<Hub />}
+              onClick={() => {
+                const next = !pairReviewOpen;
+                setPairReviewOpen(next);
+                if (next) {
+                  void loadPairSuggestions();
+                }
+              }}
+            >
+              {pairReviewOpen ? "Hide pair review" : "Review pairs"}
+            </Button>
           </Stack>
         </Stack>
 
@@ -370,6 +490,78 @@ export function App() {
           </Alert>
         )}
       </Paper>
+
+      {pairReviewOpen && (
+        <Paper sx={{ p: 2, mb: 3, borderRadius: 4, border: "1px solid #d8e1e8" }}>
+          <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={2} sx={{ mb: 1 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Hub fontSize="small" />
+              <Typography variant="h6">Pair Review</Typography>
+              <Chip size="small" label={`Suggestions: ${pairSuggestions.length}`} variant="outlined" />
+            </Stack>
+
+            <Button
+              variant="text"
+              startIcon={<Refresh />}
+              disabled={pairLoading}
+              onClick={() => {
+                void loadPairSuggestions();
+              }}
+            >
+              Refresh suggestions
+            </Button>
+          </Stack>
+
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Approve uncertain source matches when two rows likely represent the same game.
+          </Typography>
+
+          {pairError && <Alert severity="error" sx={{ mb: 2 }}>{pairError}</Alert>}
+
+          {pairLoading ? (
+            <Typography variant="body2" color="text.secondary">Loading suggestions...</Typography>
+          ) : pairSuggestions.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">No uncertain pairs right now.</Typography>
+          ) : (
+            <Stack spacing={1.5}>
+              {pairSuggestions.map((item) => {
+                const key = `${item.source}:${item.candidateId}`;
+                const approving = Boolean(approvingPairs[key]);
+
+                return (
+                  <Paper key={key} variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
+                    <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} justifyContent="space-between">
+                      <Box>
+                        <Typography variant="body2">
+                          <strong>{item.candidateHomeTeam} vs {item.candidateAwayTeam}</strong> ({item.source.toUpperCase()})
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          Candidate time: {item.candidateKickoffTime ?? "N/A"} {"->"} Suggested match: {item.targetHomeTeam} vs {item.targetAwayTeam} ({item.targetKickoffTime ?? "N/A"})
+                        </Typography>
+                      </Box>
+
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Chip size="small" label={`Score ${item.score.toFixed(2)}`} variant="outlined" />
+                        <Button
+                          size="small"
+                          variant="contained"
+                          startIcon={<TaskAlt />}
+                          disabled={approving}
+                          onClick={() => {
+                            void approvePair(item);
+                          }}
+                        >
+                          {approving ? "Approving..." : "Approve merge"}
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  </Paper>
+                );
+              })}
+            </Stack>
+          )}
+        </Paper>
+      )}
 
       {botOpen && (
         <Paper sx={{ p: 2, mb: 3, borderRadius: 4, border: "1px solid #d8e1e8" }}>
@@ -469,6 +661,43 @@ export function App() {
         <Tab label="Today" />
         <Tab label="Pinned" />
       </Tabs>
+
+      <Paper sx={{ p: 2, mb: 2, borderRadius: 3, border: "1px solid #d8e1e8" }}>
+        <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ flex: 1 }}>
+            <Select
+              size="small"
+              value={matchFilter}
+              onChange={(e) => setMatchFilter(e.target.value as MatchFilterMode)}
+              sx={{ minWidth: 240 }}
+            >
+              <MenuItem value="all">All games</MenuItem>
+              <MenuItem value="with-vitibet">Only games available in Vitibet</MenuItem>
+              <MenuItem value="only-olbg">Only games that exist only in OLBG</MenuItem>
+              <MenuItem value="only-forebet">Only games that exist only in Forebet</MenuItem>
+            </Select>
+
+            <Select
+              size="small"
+              value={matchSort}
+              onChange={(e) => setMatchSort(e.target.value as MatchSortMode)}
+              sx={{ minWidth: 240 }}
+            >
+              <MenuItem value="pinned-first">Sort: pinned first</MenuItem>
+              <MenuItem value="kickoff-asc">Sort: kickoff time (ascending)</MenuItem>
+              <MenuItem value="home-team-asc">Sort: home team A-Z</MenuItem>
+              <MenuItem value="olbg-stars-desc">Sort: OLBG stars (high to low)</MenuItem>
+              <MenuItem value="sources-desc">Sort: source coverage (most sources first)</MenuItem>
+            </Select>
+          </Stack>
+
+          <Chip
+            icon={<TravelExplore />}
+            label={`Visible games: ${visibleMatches.length}`}
+            variant="outlined"
+          />
+        </Stack>
+      </Paper>
 
       {visibleMatches.map((row) => (
         <MatchRow
