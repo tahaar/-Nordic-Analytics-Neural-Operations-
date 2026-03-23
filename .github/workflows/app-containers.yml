@@ -1,0 +1,58 @@
+name: App Containers
+
+on:
+  push:
+    paths:
+      - 'packages/frontend/**'
+      - 'packages/backend/**'
+  workflow_dispatch: {}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Login to ACR
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ secrets.ACR_LOGIN_SERVER }}
+        username: ${{ secrets.ACR_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD }}
+
+    - name: Build and push backend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./packages/backend
+        file: ./packages/backend/Dockerfile
+        push: true
+        tags: ${{ secrets.ACR_LOGIN_SERVER }}/betting-backend:latest
+
+    - name: Build and push frontend image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./packages/frontend
+        file: ./packages/frontend/Dockerfile
+        push: true
+        tags: ${{ secrets.ACR_LOGIN_SERVER }}/betting-frontend:latest
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Update backend Container App
+      uses: azure/cli@v1
+      with:
+        inlineScript: |
+          az containerapp update --name backend --resource-group YOUR_RG --image ${{ secrets.ACR_LOGIN_SERVER }}/betting-backend:latest
+
+    - name: Update frontend Container App
+      uses: azure/cli@v1
+      with:
+        inlineScript: |
+          az containerapp update --name frontend --resource-group YOUR_RG --image ${{ secrets.ACR_LOGIN_SERVER }}/betting-frontend:latest
