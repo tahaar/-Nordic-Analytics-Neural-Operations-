@@ -1,0 +1,42 @@
+name: Frontend Quality
+
+on:
+  push:
+    paths:
+      - "packages/frontend/**"
+      - ".github/workflows/frontend-quality.yml"
+  pull_request:
+    paths:
+      - "packages/frontend/**"
+      - ".github/workflows/frontend-quality.yml"
+  workflow_dispatch: {}
+
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: packages/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build

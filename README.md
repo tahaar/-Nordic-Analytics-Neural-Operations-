@@ -57,6 +57,8 @@ This monorepo contains a betting domain application built with:
 Workflows:
 - [.github/workflows/infra-terraform.yml](.github/workflows/infra-terraform.yml)
 - [.github/workflows/app-containers.yml](.github/workflows/app-containers.yml)
+- [.github/workflows/frontend-quality.yml](.github/workflows/frontend-quality.yml)
+- [.github/workflows/backend-quality.yml](.github/workflows/backend-quality.yml)
 
 ## Infrastructure
 
@@ -73,8 +75,8 @@ Workflows:
 - Subscription-level locks
 
 Security docs:
-- [Kill Switch](docs/kill-switch.md)
-- [Cost Controls](docs/cost-controls.md)
+- [Kill Switch](security-infra/docs/kill-switch.md)
+- [Cost Controls](security-infra/docs/cost-guardrails.md)
 - [Security Infra](security-infra/README.md)
 
 ## Documentation
@@ -95,6 +97,11 @@ Security docs:
 
 ### Operations
 - [Operations Guide](docs/operations.md)
+
+### Technical Docs
+- [Architecture](docs/architecture.md)
+- [API](docs/api.md)
+- [Infrastructure](docs/infra.md)
 
 ## Team & Roles
 
