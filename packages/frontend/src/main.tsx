@@ -6,15 +6,16 @@ import { App } from "./App";
 const theme = createTheme({
   palette: {
     mode: "light",
-    primary: { main: "#0b3c49" },
-    secondary: { main: "#e76f51" },
-    background: { default: "#f3f6f7" },
+    primary: { main: "#2b4a5d" },
+    secondary: { main: "#5f7c8f" },
+    background: { default: "#eef2f5", paper: "#f8fafb" },
   },
   typography: {
-    fontFamily: "'IBM Plex Sans', sans-serif",
+    fontFamily:
+      "'SF Pro Display', 'SF Pro Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif",
   },
   shape: {
-    borderRadius: 12,
+    borderRadius: 14,
   },
 });
 

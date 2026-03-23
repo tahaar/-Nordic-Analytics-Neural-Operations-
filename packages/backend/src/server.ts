@@ -18,8 +18,110 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
+const CHAT_HISTORY_TTL_MS = 1000 * 60 * 60 * 24;
 
 loadCacheFromDisk();
+
+type ChatRole = "user" | "assistant";
+type ChatHistoryEntry = {
+  role: ChatRole;
+  text: string;
+  bot: string;
+  createdAt: string;
+};
+type ChatHistory = {
+  sessionId: string;
+  provider: string;
+  messages: ChatHistoryEntry[];
+  updatedAt: string;
+};
+
+async function callAffiliatePlus(message: string, botName: string): Promise<string> {
+  const url = `https://api.affiliateplus.xyz/api/chatbot?message=${encodeURIComponent(message)}&botname=${encodeURIComponent(botName)}&ownername=NordicAnalytics`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`AffiliatePlus request failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as { message?: string };
+  const text = payload.message?.trim();
+  if (!text) {
+    throw new Error("AffiliatePlus returned empty message");
+  }
+  return text;
+}
+
+async function callGemini(message: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY");
+  }
+
+  const model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: message }] }],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Gemini request failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+
+  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join(" ").trim();
+  if (!text) {
+    throw new Error("Gemini returned empty text");
+  }
+  return text;
+}
+
+async function resolveBotReply(message: string, botName: string): Promise<{ provider: string; reply: string }> {
+  const provider = (process.env.BOT_PROVIDER || "affiliateplus").toLowerCase();
+
+  if (provider === "gemini") {
+    try {
+      const reply = await callGemini(message);
+      return { provider: "gemini", reply };
+    } catch {
+      const reply = await callAffiliatePlus(message, botName);
+      return { provider: "affiliateplus", reply };
+    }
+  }
+
+  try {
+    const reply = await callAffiliatePlus(message, botName);
+    return { provider: "affiliateplus", reply };
+  } catch {
+    const reply = await callGemini(message);
+    return { provider: "gemini", reply };
+  }
+}
+
+function getChatHistory(sessionId: string): ChatHistory {
+  const key = `chat:history:${sessionId}`;
+  const cached = getFromCache<ChatHistory>(key);
+  if (cached) return cached;
+  return {
+    sessionId,
+    provider: "unknown",
+    messages: [],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function storeChatHistory(history: ChatHistory) {
+  const key = `chat:history:${history.sessionId}`;
+  const trimmed = history.messages.slice(-60);
+  setToCache(key, { ...history, messages: trimmed }, CHAT_HISTORY_TTL_MS);
+}
 
 function toMatchKey(value: { id?: string; homeTeam: string; awayTeam: string }) {
   if (value.id) return value.id;
@@ -120,6 +222,52 @@ app.post("/api/matches/:id/review", async (req: Request, res: Response) => {
   const view = await getMatchView(req.params.id);
   if (!view) return res.status(404).json({ error: "Not found" });
   res.json(await reviewMatchAI(view));
+});
+
+app.post("/api/bot/chat", async (req: Request, res: Response) => {
+  const body = req.body as { sessionId?: string; bot?: string; message?: string };
+  const message = body.message?.trim();
+  if (!message) {
+    return res.status(400).json({ error: "message is required" });
+  }
+
+  const sessionId = body.sessionId?.trim() || "default";
+  const bot = body.bot?.trim() || "general";
+
+  try {
+    const { provider, reply } = await resolveBotReply(message, bot);
+    const history = getChatHistory(sessionId);
+    const now = new Date().toISOString();
+
+    const nextHistory: ChatHistory = {
+      sessionId,
+      provider,
+      updatedAt: now,
+      messages: [
+        ...history.messages,
+        { role: "user", text: message, bot, createdAt: now },
+        { role: "assistant", text: reply, bot, createdAt: now },
+      ],
+    };
+
+    storeChatHistory(nextHistory);
+
+    return res.json({
+      sessionId,
+      provider,
+      reply,
+      storedMessages: nextHistory.messages.length,
+    });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : "Unknown bot error";
+    return res.status(502).json({ error: "Bot provider failed", details });
+  }
+});
+
+app.get("/api/bot/chat/:sessionId", (req: Request, res: Response) => {
+  const sessionId = decodeURIComponent(req.params.sessionId || "default");
+  const history = getChatHistory(sessionId);
+  res.json(history);
 });
 
 app.get("/api/forebet/today", async (_req: Request, res: Response) => {

@@ -1,19 +1,54 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
+  Chip,
   Container,
   Divider,
+  MenuItem,
   Paper,
+  Select,
   Stack,
   Tab,
+  TextField,
   Tabs,
   Typography,
 } from "@mui/material";
+import {
+  AutoAwesome,
+  Psychology,
+  RocketLaunch,
+  Search,
+  Send,
+  SmartToy,
+  TravelExplore,
+} from "@mui/icons-material";
 import { MatchRow } from "./components/MatchRow";
 import { useBetslips } from "./hooks/useBetslips";
 import { usePinned } from "./hooks/usePinned";
 import type { ApiCombinedMatch, CombinedMatchRow, ForebetMatchStats, Tip } from "./types";
+
+type BotChoice = "general-free" | "football-analyst" | "sharp-scout";
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  bot: BotChoice;
+  createdAt: string;
+};
+
+const BOT_LABELS: Record<BotChoice, string> = {
+  "general-free": "General Free Bot",
+  "football-analyst": "Football Analyst",
+  "sharp-scout": "Sharp Scout",
+};
+
+function botIcon(choice: BotChoice) {
+  if (choice === "football-analyst") return <Psychology fontSize="small" />;
+  if (choice === "sharp-scout") return <AutoAwesome fontSize="small" />;
+  return <SmartToy fontSize="small" />;
+}
 
 function buildTipsFromRow(matchKey: string, row: ApiCombinedMatch): Tip[] {
   const now = new Date().toISOString();
@@ -105,6 +140,14 @@ export function App() {
   const [tab, setTab] = useState(0);
   const [loadingStatsByKey, setLoadingStatsByKey] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [botOpen, setBotOpen] = useState(false);
+  const [botChoice, setBotChoice] = useState<BotChoice>("general-free");
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [siteSearchLoading, setSiteSearchLoading] = useState(false);
+  const [siteSearchSummary, setSiteSearchSummary] = useState<string | null>(null);
+  const [siteSearchError, setSiteSearchError] = useState<string | null>(null);
   const { pinned, toggle } = usePinned();
   const { slips, addSlip, duplicateSlip, addSelectionToSlip, moveSelection, removeSelection } = useBetslips();
 
@@ -182,14 +225,239 @@ export function App() {
 
   const visibleMatches = tab === 0 ? sortedMatches : sortedMatches.filter((m) => pinned.includes(m.matchKey));
 
+  const sendBotMessage = async () => {
+    const text = chatInput.trim();
+    if (!text || chatSending) return;
+
+    const now = new Date().toISOString();
+    const userMessage: ChatMessage = {
+      id: `${Date.now()}-u`,
+      role: "user",
+      text,
+      bot: botChoice,
+      createdAt: now,
+    };
+
+    setChatMessages((prev) => [...prev, userMessage]);
+    setChatInput("");
+    setChatSending(true);
+
+    try {
+      const r = await fetch("/api/bot/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "main-ui",
+          bot: botChoice,
+          message: text,
+        }),
+      });
+
+      if (!r.ok) {
+        throw new Error("Bot API request failed");
+      }
+
+      const payload = (await r.json()) as { reply?: string };
+      const assistantMessage: ChatMessage = {
+        id: `${Date.now()}-a`,
+        role: "assistant",
+        text: payload.reply?.trim() || "Bot did not return a response.",
+        bot: botChoice,
+        createdAt: new Date().toISOString(),
+      };
+      setChatMessages((prev) => [...prev, assistantMessage]);
+    } catch {
+      const assistantMessage: ChatMessage = {
+        id: `${Date.now()}-a`,
+        role: "assistant",
+        text: "Bot request failed. Please verify backend and provider settings.",
+        bot: botChoice,
+        createdAt: new Date().toISOString(),
+      };
+      setChatMessages((prev) => [...prev, assistantMessage]);
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const runSiteSearches = async () => {
+    setSiteSearchError(null);
+    setSiteSearchSummary(null);
+    setSiteSearchLoading(true);
+
+    try {
+      const [forebetRes, olbgRes, vitibetRes] = await Promise.all([
+        fetch("/api/forebet/today"),
+        fetch("/api/olbg/today"),
+        fetch("/api/vitibet/today"),
+      ]);
+
+      if (!forebetRes.ok || !olbgRes.ok || !vitibetRes.ok) {
+        throw new Error("Failed to run one or more source searches");
+      }
+
+      const [forebetRows, olbgRows, vitibetRows] = (await Promise.all([
+        forebetRes.json(),
+        olbgRes.json(),
+        vitibetRes.json(),
+      ])) as [Array<unknown>, Array<unknown>, Array<unknown>];
+
+      setSiteSearchSummary(
+        `Search complete: Forebet ${forebetRows.length}, OLBG ${olbgRows.length}, Vitibet ${vitibetRows.length}`,
+      );
+    } catch {
+      setSiteSearchError("Site search failed. Check backend connection and try again.");
+    } finally {
+      setSiteSearchLoading(false);
+    }
+  };
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        Nordic Match Center
-      </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-        Combined daily picks from Forebet, OLBG and Vitibet. Pin key matches and build your betslips.
-      </Typography>
+      <Paper
+        sx={{
+          p: 2,
+          mb: 3,
+          borderRadius: 4,
+          background: "linear-gradient(135deg, #f8fafb 0%, #eef3f7 55%, #edf1f5 100%)",
+          border: "1px solid #d8e1e8",
+        }}
+      >
+        <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" spacing={2}>
+          <Box>
+            <Typography variant="h4" gutterBottom>
+              Nordic Match Center
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
+              Combined daily picks from Forebet, OLBG and Vitibet. Pin key matches and build your betslips.
+            </Typography>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Chip icon={<TravelExplore />} label="Source aggregation" size="small" />
+              <Chip icon={<RocketLaunch />} label="Fast slip building" size="small" />
+              <Chip icon={<SmartToy />} label="Bot mode" size="small" />
+            </Stack>
+          </Box>
+
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ xs: "stretch", sm: "center" }}>
+            <Button
+              variant="outlined"
+              startIcon={<Search />}
+              disabled={siteSearchLoading}
+              onClick={() => {
+                void runSiteSearches();
+              }}
+            >
+              {siteSearchLoading ? "Running searches..." : "Run site searches"}
+            </Button>
+            <Button
+              variant={botOpen ? "contained" : "outlined"}
+              startIcon={<SmartToy />}
+              onClick={() => setBotOpen((v) => !v)}
+            >
+              {botOpen ? "Hide bot" : "Open bot"}
+            </Button>
+          </Stack>
+        </Stack>
+
+        {siteSearchSummary && (
+          <Alert sx={{ mt: 2 }} severity="success">
+            {siteSearchSummary}
+          </Alert>
+        )}
+        {siteSearchError && (
+          <Alert sx={{ mt: 2 }} severity="error">
+            {siteSearchError}
+          </Alert>
+        )}
+      </Paper>
+
+      {botOpen && (
+        <Paper sx={{ p: 2, mb: 3, borderRadius: 4, border: "1px solid #d8e1e8" }}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 240 }}>
+              {botIcon(botChoice)}
+              <Typography variant="h6">Bot Console</Typography>
+            </Stack>
+
+            <Select
+              size="small"
+              value={botChoice}
+              onChange={(e) => setBotChoice(e.target.value as BotChoice)}
+              sx={{ minWidth: 210 }}
+            >
+              <MenuItem value="general-free">General Free Bot</MenuItem>
+              <MenuItem value="football-analyst">Football Analyst</MenuItem>
+              <MenuItem value="sharp-scout">Sharp Scout</MenuItem>
+            </Select>
+          </Stack>
+
+          <Paper
+            variant="outlined"
+            sx={{
+              mt: 2,
+              p: 1.5,
+              borderRadius: 3,
+              maxHeight: 280,
+              overflowY: "auto",
+              bgcolor: "#f7fafc",
+            }}
+          >
+            {chatMessages.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                Choose a bot, write a message, and you will see responses in this same panel.
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                {chatMessages.map((m) => (
+                  <Box
+                    key={m.id}
+                    sx={{
+                      alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                      maxWidth: "88%",
+                      px: 1.2,
+                      py: 0.8,
+                      borderRadius: 2,
+                      bgcolor: m.role === "user" ? "#dbe8f2" : "#ecf1f5",
+                      border: "1px solid #d2dce5",
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      {m.role === "user" ? "You" : BOT_LABELS[m.bot]}
+                    </Typography>
+                    <Typography variant="body2">{m.text}</Typography>
+                  </Box>
+                ))}
+              </Stack>
+            )}
+          </Paper>
+
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1.5 }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Type a message to the selected bot"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void sendBotMessage();
+                }
+              }}
+            />
+            <Button
+              variant="contained"
+              startIcon={<Send />}
+              disabled={!chatInput.trim() || chatSending}
+              onClick={() => {
+                void sendBotMessage();
+              }}
+            >
+              Send
+            </Button>
+          </Stack>
+        </Paper>
+      )}
 
       {error && (
         <Paper sx={{ p: 2, mb: 2, bgcolor: "#fff4e5" }}>
