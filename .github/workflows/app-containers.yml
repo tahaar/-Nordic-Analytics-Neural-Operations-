@@ -2,10 +2,22 @@ name: App Containers
 
 on:
   push:
+    branches:
+      - production
     paths:
       - 'packages/frontend/**'
       - 'packages/backend/**'
-  workflow_dispatch: {}
+      - 'Dockerfile.frontend'
+      - 'Dockerfile.backend'
+      - '.github/workflows/app-containers.yml'
+
+concurrency:
+  group: app-containers-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build-and-deploy:
@@ -25,26 +37,25 @@ jobs:
     - name: Build and push backend image
       uses: docker/build-push-action@v5
       with:
-        context: ./packages/backend
-        file: ./packages/backend/Dockerfile
+        context: .
+        file: ./Dockerfile.backend
         push: true
         tags: ${{ secrets.ACR_LOGIN_SERVER }}/betting-backend:latest
 
     - name: Build and push frontend image
       uses: docker/build-push-action@v5
       with:
-        context: ./packages/frontend
-        file: ./packages/frontend/Dockerfile
+        context: .
+        file: ./Dockerfile.frontend
         push: true
         tags: ${{ secrets.ACR_LOGIN_SERVER }}/betting-frontend:latest
 
     - name: Azure Login
-      uses: azure/login@v1
+      uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
     - name: Update backend Container App
       uses: azure/cli@v1

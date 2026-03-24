@@ -25,6 +25,26 @@ export type ForebetMatchStats = {
   formAway?: string;
 };
 
+export type ForebetDeepDetails = {
+  leaguePositionHome: number | null;
+  leaguePositionAway: number | null;
+  last10Home: string[];
+  last10Away: string[];
+  xgHome: number | null;
+  xgAway: number | null;
+  shotsHome: number | null;
+  shotsAway: number | null;
+  shotsOnTargetHome: number | null;
+  shotsOnTargetAway: number | null;
+  possessionHome: number | null;
+  possessionAway: number | null;
+  dangerousHome: number | null;
+  dangerousAway: number | null;
+  formHome: string | null;
+  formAway: string | null;
+  h2h: string[];
+};
+
 export type ForebetRow = {
   predictedScore?: string;
   percentHome?: number;

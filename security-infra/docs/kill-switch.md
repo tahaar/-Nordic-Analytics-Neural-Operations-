@@ -14,3 +14,15 @@ Fast containment control when there is security or cost risk.
 
 ## Operational rule
 Use kill switch as containment, not as root-cause fix. Always follow with investigation and controlled recovery.
+
+## Alert-triggered usage
+- Kill switch can be invoked as the operational response to platform alerts.
+- Typical triggers:
+	- budget anomaly or unexpected spend spike
+	- restart storm
+	- sudden 5xx spike combined with suspicious runtime behavior
+- Recommended pattern:
+	1. alert fires
+	2. human confirms signal quality
+	3. kill switch is executed
+	4. workloads are contained before deeper analysis

@@ -12,14 +12,17 @@ import {
   Typography,
 } from "@mui/material";
 import { ExpandMore, Star, StarBorder } from "@mui/icons-material";
-import type { CombinedMatchRow } from "../types";
+import type { CombinedMatchRow, ForebetDeepDetails } from "../types";
 
 type MatchRowProps = {
   row: CombinedMatchRow;
   pinned: boolean;
   loadingStats: boolean;
+  details?: ForebetDeepDetails | null;
+  loadingDetails: boolean;
   onTogglePin: () => void;
   onExpandAndLoad: () => Promise<void>;
+  onLoadDetails: (matchKey: string) => Promise<void>;
   onAddToSlip: () => void;
 };
 
@@ -31,8 +34,11 @@ export function MatchRow({
   row,
   pinned,
   loadingStats,
+  details,
+  loadingDetails,
   onTogglePin,
   onExpandAndLoad,
+  onLoadDetails,
   onAddToSlip,
 }: MatchRowProps) {
   const [open, setOpen] = useState(false);
@@ -102,6 +108,65 @@ export function MatchRow({
           <Button variant="contained" onClick={onAddToSlip}>
             Add to betslip
           </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            sx={{ ml: 1 }}
+            onClick={() => {
+              void onLoadDetails(row.matchKey);
+            }}
+          >
+            Nayta tarkemmat statsit
+          </Button>
+
+          {details && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle1">Tarkemmat Forebet-statsit</Typography>
+
+              <Typography variant="body2">
+                Sarjasijoitus: {details.leaguePositionHome ?? "-"} / {details.leaguePositionAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2">
+                xG: {details.xgHome ?? "-"} / {details.xgAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2">
+                Laukaukset: {details.shotsHome ?? "-"} / {details.shotsAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2">
+                Laukaukset maalia kohti: {details.shotsOnTargetHome ?? "-"} / {details.shotsOnTargetAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2">
+                Pallonhallinta: {details.possessionHome ?? "-"} / {details.possessionAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2">
+                Vaaralliset hyokkaykset: {details.dangerousHome ?? "-"} / {details.dangerousAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Form: {details.formHome ?? "-"} vs {details.formAway ?? "-"}
+              </Typography>
+
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Keskinaiset:
+              </Typography>
+              <ul>
+                {details.h2h.map((h, i) => (
+                  <li key={i}>{h}</li>
+                ))}
+              </ul>
+            </Box>
+          )}
+
+          {loadingDetails && (
+            <Typography variant="body2" sx={{ mt: 1 }}>
+              Ladataan tarkempia tietoja...
+            </Typography>
+          )}
         </Collapse>
       </CardContent>
     </Card>

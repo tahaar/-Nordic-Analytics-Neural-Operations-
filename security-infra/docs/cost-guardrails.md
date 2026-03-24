@@ -19,3 +19,8 @@ If budget usage jumps from expected trend:
 2. Check autoscale and restarts
 3. Validate traffic source
 4. Apply temporary limit or kill-switch if needed
+
+## Kill switch relationship
+- Cost alerts are not only informational; they can be the signal that starts containment.
+- If spend is clearly runaway or abusive, the operational path can escalate to kill switch execution.
+- This is especially useful for hobby-scale systems where cost containment matters as much as runtime availability.

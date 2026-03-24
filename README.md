@@ -60,6 +60,10 @@ Workflows:
 - [.github/workflows/frontend-quality.yml](.github/workflows/frontend-quality.yml)
 - [.github/workflows/backend-quality.yml](.github/workflows/backend-quality.yml)
 
+Trigger policy:
+- Infra workflow runs manually only (`workflow_dispatch`) and supports both `apply` and `destroy`.
+- App and quality workflows run automatically only on `production` branch.
+
 ## Infrastructure
 
 - Azure Container Apps for hosting
@@ -79,6 +83,7 @@ Security docs:
 - [Kill Switch](security-infra/docs/kill-switch.md)
 - [Cost Controls](security-infra/docs/cost-guardrails.md)
 - [Security Infra](security-infra/README.md)
+- [Infrastructure Runbook](docs/infra.md)
 
 ## Documentation
 

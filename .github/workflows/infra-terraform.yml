@@ -1,14 +1,50 @@
 name: Infra Terraform
 
 on:
-  push:
+  workflow_dispatch:
+    inputs:
+      terraform_action:
+        description: "Terraform action to run"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+      confirm_destroy:
+        description: "Type DESTROY to confirm teardown (required when action=destroy)"
+        required: false
+        default: ""
+      backend_image_tag:
+        description: "Existing backend image tag in ACR (for validation), e.g. latest or 2026-03-24"
+        required: true
+        default: "latest"
+      frontend_image_tag:
+        description: "Existing frontend image tag in ACR (for validation), e.g. latest or 2026-03-24"
+        required: true
+        default: "latest"
+  pull_request:
+    branches:
+      - production
     paths:
       - 'infra/**'
-  workflow_dispatch: {}
+      - '.github/workflows/infra-terraform.yml'
+
+concurrency:
+  group: infra-terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    env:
+      TERRAFORM_ACTION: ${{ inputs.terraform_action }}
+      BACKEND_IMAGE_TAG: ${{ inputs.backend_image_tag }}
+      FRONTEND_IMAGE_TAG: ${{ inputs.frontend_image_tag }}
 
     steps:
     - name: Checkout
@@ -20,19 +56,73 @@ jobs:
         terraform_version: "1.5.0"
 
     - name: Azure Login
-      uses: azure/login@v1
+      uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+    - name: Validate image tags exist in ACR
+      if: ${{ github.event_name == 'workflow_dispatch' && inputs.terraform_action == 'apply' }}
+      run: |
+        set -euo pipefail
+        ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
+
+        backend_found=$(az acr repository show-tags \
+          --name "$ACR_NAME" \
+          --repository betting-backend \
+          --query "contains(@, '${BACKEND_IMAGE_TAG}')" \
+          -o tsv)
+
+        frontend_found=$(az acr repository show-tags \
+          --name "$ACR_NAME" \
+          --repository betting-frontend \
+          --query "contains(@, '${FRONTEND_IMAGE_TAG}')" \
+          -o tsv)
+
+        if [[ "$backend_found" != "true" ]]; then
+          echo "Backend tag not found in ACR: ${BACKEND_IMAGE_TAG}"
+          exit 1
+        fi
+
+        if [[ "$frontend_found" != "true" ]]; then
+          echo "Frontend tag not found in ACR: ${FRONTEND_IMAGE_TAG}"
+          exit 1
+        fi
+
+        echo "Validated image tags exist: backend=${BACKEND_IMAGE_TAG}, frontend=${FRONTEND_IMAGE_TAG}"
+      env:
+        ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+
+    - name: Confirm destroy intent
+      if: ${{ github.event_name == 'workflow_dispatch' && inputs.terraform_action == 'destroy' }}
+      run: |
+        if [[ "${{ inputs.confirm_destroy }}" != "DESTROY" ]]; then
+          echo "Destroy not confirmed. Set confirm_destroy=DESTROY to proceed."
+          exit 1
+        fi
+        echo "Destroy confirmed."
 
     - name: Terraform Init
-      run: terraform -chdir=infra init
+      run: |
+        terraform -chdir=infra init \
+          -backend-config="resource_group_name=${{ secrets.TFSTATE_RG }}" \
+          -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE }}" \
+          -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+          -backend-config="key=infra.tfstate"
 
     - name: Terraform Plan
-      run: terraform -chdir=infra plan
+      run: |
+        if [[ "$TERRAFORM_ACTION" == "destroy" ]]; then
+          terraform -chdir=infra plan -destroy
+        else
+          terraform -chdir=infra plan
+        fi
 
     - name: Terraform Apply
-      if: github.ref == 'refs/heads/main'
+      if: ${{ github.event_name == 'workflow_dispatch' && inputs.terraform_action == 'apply' }}
       run: terraform -chdir=infra apply -auto-approve
+
+    - name: Terraform Destroy
+      if: ${{ github.event_name == 'workflow_dispatch' && inputs.terraform_action == 'destroy' }}
+      run: terraform -chdir=infra destroy -auto-approve

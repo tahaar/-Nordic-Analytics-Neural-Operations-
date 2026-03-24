@@ -1,5 +1,6 @@
 import {
   CombinedMatch,
+  ForebetDeepDetails,
   ForebetMatchDetails,
   ForebetTodayMatch,
   OlbgTodayTip,
@@ -635,4 +636,91 @@ export async function scrapeCombinedMatches(): Promise<CombinedMatch[]> {
   setPairSuggestions(suggestions);
   setToCache(key, result, TTL_TODAY_MS);
   return result;
+}
+
+function extractNullableNumber(pattern: RegExp, plain: string): number | null {
+  const match = plain.match(pattern)?.[1];
+  if (!match) return null;
+  const value = Number(match);
+  return Number.isFinite(value) ? value : null;
+}
+
+function extractList(pattern: RegExp, plain: string, max = 10): string[] {
+  return (plain.match(pattern) ?? []).slice(0, max).map(cleanText).filter(Boolean);
+}
+
+// On-demand deep Forebet scrape for one match page.
+export async function scrapeForebetMatchDeepDetails(matchUrl: string): Promise<ForebetDeepDetails> {
+  const empty: ForebetDeepDetails = {
+    leaguePositionHome: null,
+    leaguePositionAway: null,
+    last10Home: [],
+    last10Away: [],
+    xgHome: null,
+    xgAway: null,
+    shotsHome: null,
+    shotsAway: null,
+    shotsOnTargetHome: null,
+    shotsOnTargetAway: null,
+    possessionHome: null,
+    possessionAway: null,
+    dangerousHome: null,
+    dangerousAway: null,
+    formHome: null,
+    formAway: null,
+    h2h: [],
+  };
+
+  try {
+    const response = await fetch(matchUrl, {
+      headers: { "user-agent": "Mozilla/5.0 (compatible; NordicAnalyticsBot/1.0)" },
+    });
+    if (!response.ok) return empty;
+
+    const html = await response.text();
+    const plain = cleanText(html.replace(/<[^>]+>/g, " "));
+
+    const xgHome = extractNullableNumber(/xg[^\d]*(\d+(?:\.\d+)?)/i, plain);
+    const xgAway = extractNullableNumber(/xg[^\d]*\d+(?:\.\d+)?[^\d]*(\d+(?:\.\d+)?)/i, plain);
+    const shotsHome = extractNullableNumber(/shots[^\d]*(\d{1,3})/i, plain);
+    const shotsAway = extractNullableNumber(/shots[^\d]*\d{1,3}[^\d]*(\d{1,3})/i, plain);
+    const shotsOnTargetHome = extractNullableNumber(/shots on target[^\d]*(\d{1,3})/i, plain);
+    const shotsOnTargetAway = extractNullableNumber(/shots on target[^\d]*\d{1,3}[^\d]*(\d{1,3})/i, plain);
+    const possessionHome = extractNullableNumber(/possession[^\d]*(\d{1,3})\s*%/i, plain);
+    const possessionAway = extractNullableNumber(/possession[^\d]*\d{1,3}\s*%[^\d]*(\d{1,3})\s*%/i, plain);
+    const dangerousHome = extractNullableNumber(/dangerous attacks?[^\d]*(\d{1,3})/i, plain);
+    const dangerousAway = extractNullableNumber(/dangerous attacks?[^\d]*\d{1,3}[^\d]*(\d{1,3})/i, plain);
+    const leaguePositionHome = extractNullableNumber(/position[^\d]*(\d{1,2})/i, plain);
+    const leaguePositionAway = extractNullableNumber(/position[^\d]*\d{1,2}[^\d]*(\d{1,2})/i, plain);
+
+    const formTokens = plain.match(/\b[WDL]{3,10}\b/g) ?? [];
+    const formHome = formTokens[0] ?? null;
+    const formAway = formTokens[1] ?? null;
+
+    const last10Home = extractList(/last\s*10[^.]{0,100}/gi, plain, 10);
+    const last10Away = extractList(/last\s*10[^.]{0,100}/gi, plain, 10).slice(last10Home.length ? 1 : 0, 11);
+    const h2h = extractList(/head to head[^.]{0,120}/gi, plain, 8);
+
+    return {
+      leaguePositionHome,
+      leaguePositionAway,
+      last10Home,
+      last10Away,
+      xgHome,
+      xgAway,
+      shotsHome,
+      shotsAway,
+      shotsOnTargetHome,
+      shotsOnTargetAway,
+      possessionHome,
+      possessionAway,
+      dangerousHome,
+      dangerousAway,
+      formHome,
+      formAway,
+      h2h,
+    };
+  } catch {
+    return empty;
+  }
 }

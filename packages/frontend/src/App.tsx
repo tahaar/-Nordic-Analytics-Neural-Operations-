@@ -30,7 +30,14 @@ import {
 import { MatchRow } from "./components/MatchRow";
 import { useBetslips } from "./hooks/useBetslips";
 import { usePinned } from "./hooks/usePinned";
-import type { ApiCombinedMatch, CombinedMatchRow, ForebetMatchStats, PairSuggestion, Tip } from "./types";
+import type {
+  ApiCombinedMatch,
+  CombinedMatchRow,
+  ForebetDeepDetails,
+  ForebetMatchStats,
+  PairSuggestion,
+  Tip,
+} from "./types";
 
 type BotChoice = "general-free" | "football-analyst" | "sharp-scout";
 type ChatMessage = {
@@ -178,6 +185,8 @@ export function App() {
   const [approvingPairs, setApprovingPairs] = useState<Record<string, boolean>>({});
   const [matchFilter, setMatchFilter] = useState<MatchFilterMode>("all");
   const [matchSort, setMatchSort] = useState<MatchSortMode>("pinned-first");
+  const [details, setDetails] = useState<Record<string, ForebetDeepDetails | null>>({});
+  const [loadingDetails, setLoadingDetails] = useState<Record<string, boolean>>({});
   const { pinned, toggle } = usePinned();
   const { slips, addSlip, duplicateSlip, addSelectionToSlip, moveSelection, removeSelection } = useBetslips();
 
@@ -280,6 +289,21 @@ export function App() {
       // Ignore detail fetch errors to keep list usable.
     } finally {
       setLoadingStatsByKey((prev) => ({ ...prev, [row.matchKey]: false }));
+    }
+  };
+
+  const loadDetails = async (matchKey: string) => {
+    if (details[matchKey] || loadingDetails[matchKey]) return;
+
+    setLoadingDetails((prev) => ({ ...prev, [matchKey]: true }));
+    try {
+      const r = await fetch(`/api/forebet/details/${encodeURIComponent(matchKey)}`);
+      const data = r.ok ? ((await r.json()) as ForebetDeepDetails) : null;
+      setDetails((prev) => ({ ...prev, [matchKey]: data }));
+    } catch {
+      setDetails((prev) => ({ ...prev, [matchKey]: null }));
+    } finally {
+      setLoadingDetails((prev) => ({ ...prev, [matchKey]: false }));
     }
   };
 
@@ -705,8 +729,11 @@ export function App() {
           row={row}
           pinned={pinned.includes(row.matchKey)}
           loadingStats={Boolean(loadingStatsByKey[row.matchKey])}
+          details={details[row.matchKey]}
+          loadingDetails={Boolean(loadingDetails[row.matchKey])}
           onTogglePin={() => toggle(row.matchKey)}
           onExpandAndLoad={() => loadForebetStats(row)}
+          onLoadDetails={loadDetails}
           onAddToSlip={() => ensureFirstSlipAndAdd(row)}
         />
       ))}

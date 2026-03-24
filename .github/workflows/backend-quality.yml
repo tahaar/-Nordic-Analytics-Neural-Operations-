@@ -2,14 +2,21 @@ name: Backend Quality
 
 on:
   push:
+    branches:
+      - production
     paths:
       - "packages/backend/**"
       - ".github/workflows/backend-quality.yml"
   pull_request:
+    branches:
+      - production
     paths:
       - "packages/backend/**"
       - ".github/workflows/backend-quality.yml"
-  workflow_dispatch: {}
+
+concurrency:
+  group: backend-quality-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   typecheck:

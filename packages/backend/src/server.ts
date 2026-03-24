@@ -9,6 +9,7 @@ import {
   approvePairSuggestion,
   getPairSuggestions,
   scrapeCombinedMatches,
+  scrapeForebetMatchDeepDetails,
   scrapeForebetMatchDetails,
   scrapeForebetToday,
   scrapeOlbgToday,
@@ -295,6 +296,25 @@ app.get("/api/forebet/match/:id", async (req: Request, res: Response) => {
     formHome: details.form?.[0],
     formAway: details.form?.[1],
   });
+});
+
+app.get("/api/forebet/details/:matchKey", async (req: Request, res: Response) => {
+  const matchKey = decodeURIComponent(req.params.matchKey);
+  const cacheKey = `forebet:details:${matchKey}`;
+
+  const cached = getFromCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  const all = await scrapeCombinedMatches();
+  const match = all.find((m) => toMatchKey(m) === matchKey)?.forebet;
+
+  if (!match || !match.matchUrl) {
+    return res.status(404).json({ error: "Match not found or no link" });
+  }
+
+  const details = await scrapeForebetMatchDeepDetails(match.matchUrl);
+  setToCache(cacheKey, details, 1000 * 60 * 20);
+  return res.json(details);
 });
 
 app.get("/api/olbg/today", async (_req: Request, res: Response) => {
