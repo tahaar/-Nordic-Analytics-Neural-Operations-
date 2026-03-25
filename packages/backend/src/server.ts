@@ -4,7 +4,7 @@ import type { Request, Response } from "express";
 import { loadCacheFromDisk, saveCacheToDisk, getFromCache, setToCache } from "./cache";
 import { DB } from "./db";
 import { reviewMatchAI } from "./ai";
-import type { MatchView } from "./types";
+import type { MatchView, CombinedMatch } from "./types";
 import {
   approvePairSuggestion,
   getPairSuggestions,
@@ -372,6 +372,33 @@ app.post("/api/matches/pair-suggestions/approve", async (req: Request, res: Resp
   await scrapeCombinedMatches();
 
   return res.json({ ok: true });
+});
+
+function groupLeaguesByCountry(matches: CombinedMatch[]): Record<string, string[]> {
+  const map: Record<string, Set<string>> = {};
+  for (const m of matches) {
+    const rawLeague = m.olbg?.league ?? m.vitibet?.league;
+    if (!rawLeague) continue;
+
+    const parts = rawLeague.split(" - ");
+    const country = parts[0] ?? "Other";
+    const league = parts[1] ?? parts[0] ?? "Other";
+
+    if (!map[country]) map[country] = new Set();
+    map[country].add(league);
+  }
+
+  const result: Record<string, string[]> = {};
+  for (const c of Object.keys(map)) {
+    result[c] = Array.from(map[c]!);
+  }
+  return result;
+}
+
+app.get("/api/leagues", async (_req: Request, res: Response) => {
+  const all = await scrapeCombinedMatches();
+  const grouped = groupLeaguesByCountry(all);
+  res.json(grouped);
 });
 
 process.on("SIGTERM", () => {

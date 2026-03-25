@@ -28,6 +28,8 @@ import {
   TravelExplore,
 } from "@mui/icons-material";
 import { MatchRow } from "./components/MatchRow";
+import { MatchFilters } from "./components/MatchFilters";
+import type { MatchFilterState } from "./components/MatchFilters";
 import { useBetslips } from "./hooks/useBetslips";
 import { usePinned } from "./hooks/usePinned";
 import type {
@@ -185,6 +187,14 @@ export function App() {
   const [approvingPairs, setApprovingPairs] = useState<Record<string, boolean>>({});
   const [matchFilter, setMatchFilter] = useState<MatchFilterMode>("all");
   const [matchSort, setMatchSort] = useState<MatchSortMode>("pinned-first");
+  const [filter, setFilter] = useState<MatchFilterState>({
+    vitibet: { homeMin: 0, drawMin: 0, awayMin: 0 },
+    forebet: { homeMin: 0, drawMin: 0, awayMin: 0 },
+    leagues: [],
+    onlyVitibet: false,
+    onlyOLBG: false,
+  });
+  const [leagues, setLeagues] = useState<Record<string, string[]>>({});
   const [details, setDetails] = useState<Record<string, ForebetDeepDetails | null>>({});
   const [loadingDetails, setLoadingDetails] = useState<Record<string, boolean>>({});
   const { pinned, toggle } = usePinned();
@@ -204,6 +214,13 @@ export function App() {
     };
 
     void load();
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/leagues")
+      .then((r) => r.json())
+      .then((data: Record<string, string[]>) => setLeagues(data))
+      .catch(() => undefined);
   }, []);
 
   const arrangedMatches = useMemo(() => {
@@ -309,6 +326,30 @@ export function App() {
 
   const visibleMatches =
     tab === 0 ? arrangedMatches : arrangedMatches.filter((m) => pinned.includes(m.matchKey));
+
+  const filteredMatches = visibleMatches.filter((m) => {
+    if (filter.onlyVitibet && !m.vitibet) return false;
+    if (filter.onlyOLBG && !m.olbg) return false;
+
+    if (filter.leagues.length > 0) {
+      const leagueName = m.league.split(" - ")[1] ?? m.league;
+      if (!filter.leagues.includes(leagueName)) return false;
+    }
+
+    if (m.vitibet) {
+      if ((m.vitibet.percentHome ?? 0) < filter.vitibet.homeMin) return false;
+      if ((m.vitibet.percentDraw ?? 0) < filter.vitibet.drawMin) return false;
+      if ((m.vitibet.percentAway ?? 0) < filter.vitibet.awayMin) return false;
+    }
+
+    if (m.forebet) {
+      if ((m.forebet.percentHome ?? 0) < filter.forebet.homeMin) return false;
+      if ((m.forebet.percentDraw ?? 0) < filter.forebet.drawMin) return false;
+      if ((m.forebet.percentAway ?? 0) < filter.forebet.awayMin) return false;
+    }
+
+    return true;
+  });
 
   const sendBotMessage = async () => {
     const text = chatInput.trim();
@@ -681,6 +722,8 @@ export function App() {
         </Paper>
       )}
 
+      <MatchFilters filter={filter} setFilter={setFilter} leagues={leagues} />
+
       <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Today" />
         <Tab label="Pinned" />
@@ -717,13 +760,13 @@ export function App() {
 
           <Chip
             icon={<TravelExplore />}
-            label={`Visible games: ${visibleMatches.length}`}
+            label={`Visible games: ${filteredMatches.length}`}
             variant="outlined"
           />
         </Stack>
       </Paper>
 
-      {visibleMatches.map((row) => (
+      {filteredMatches.map((row) => (
         <MatchRow
           key={row.matchKey}
           row={row}
