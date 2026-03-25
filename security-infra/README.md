@@ -4,6 +4,44 @@ Tämä hakemisto sisältää turva-Terraformin, jota EI ajeta pipelineissa.
 
 Ajetaan vain manuaalisesti: terraform init/plan/apply.
 
+## Ennen ajoa: aktivoi tarvittava Azure-oikeus PIM:llä
+
+Suositeltu malli:
+- `security-infra/` ajetaan ihmisoperaattorilla, ei GitHub-pipelinella.
+- Korotettu Azure-oikeus aktivoidaan vain rajatuksi ajaksi PIM:llä ennen `terraform apply`:ta.
+
+Käytännössä:
+1. Avaa Azure Portal -> Entra ID -> Privileged Identity Management.
+2. Avaa `My roles`.
+3. Etsi security-stackin ajamiseen tarvittava rooli oikeassa scopessa.
+4. Aktivoi rooli, lisää perustelu ja lyhyt kesto.
+5. Suorita vasta sen jälkeen `terraform init/plan/apply`.
+
+Jos käytätte erillistä security-subia, aktivoi rooli juuri siihen subscriptioniin tai sen hallittuun scopeen.
+Jos käytätte erillistä security-RG:tä, aktivoi rooli siihen RG-scopeen mahdollisimman kapeasti.
+
+Tarkempi identiteetti-, OIDC- ja PIM-runbook löytyy tiedostosta `docs/infra.md`.
+
+## Manuaalinen ajo
+
+Dev-esimerkki:
+
+```bash
+cd security-infra
+terraform init
+terraform plan -var-file=envs/dev/main.tfvars
+terraform apply -var-file=envs/dev/main.tfvars
+```
+
+Prod-esimerkki:
+
+```bash
+cd security-infra
+terraform init
+terraform plan -var-file=envs/prod/main.tfvars
+terraform apply -var-file=envs/prod/main.tfvars
+```
+
 ## Aloita tästä: luo ensin turvasubi
 
 Pidä malli yksinkertaisena:

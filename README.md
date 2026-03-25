@@ -55,6 +55,29 @@ This monorepo contains a betting domain application built with:
 - **App Pipeline**: Docker build/push + Container App update on code changes
 - **Manual Security**: Security infra run manually for safety
 
+### Deploy Overview
+Current intended deployment model:
+1. Create and configure the security layer first.
+2. Create the GitHub Azure deployment identity and configure OIDC.
+3. Use PIM for time-limited privileged manual actions.
+4. Run `security-infra/` manually with Terraform.
+5. Run the infra baseline manually from GitHub Actions.
+6. Push application changes to `production` to trigger build and deployment.
+7. Read the frontend Container App ingress FQDN from Azure and open it in browser.
+
+Branch roles:
+- `main` = work branch
+- `production` = deployment branch
+
+Important distinctions:
+- `security-infra/` is manual by design.
+- `.github/workflows/infra-terraform.yml` is manually triggered.
+- `.github/workflows/app-containers.yml` deploys the app automatically from `production` pushes.
+
+Full step-by-step runbook:
+- [Infrastructure Details](docs/infra.md)
+- [Security Infra](security-infra/README.md)
+
 Workflows:
 - [.github/workflows/infra-terraform.yml](.github/workflows/infra-terraform.yml)
 - [.github/workflows/app-containers.yml](.github/workflows/app-containers.yml)
@@ -64,6 +87,10 @@ Workflows:
 Trigger policy:
 - Infra workflow runs manually only (`workflow_dispatch`) and supports both `apply` and `destroy`.
 - App and quality workflows run automatically only on `production` branch.
+
+Branch note:
+- Repository default branch may be `main`, but the current deployment workflows are configured against `production`.
+- If your actual release flow uses `main`, update the workflow branch filters before relying on automatic deployment.
 
 ## Infrastructure
 
