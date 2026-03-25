@@ -30,8 +30,10 @@ import {
 import { MatchRow } from "./components/MatchRow";
 import { MatchFilters } from "./components/MatchFilters";
 import type { MatchFilterState } from "./components/MatchFilters";
+import { LogoutButton } from "./components/LogoutButton";
 import { useBetslips } from "./hooks/useBetslips";
 import { usePinned } from "./hooks/usePinned";
+import { apiFetch } from "./services/apiFetch";
 import type {
   ApiCombinedMatch,
   CombinedMatchRow,
@@ -204,7 +206,7 @@ export function App() {
     const load = async () => {
       setError(null);
       try {
-        const r = await fetch("/api/matches/combined");
+        const r = await apiFetch("/api/matches/combined");
         if (!r.ok) throw new Error("Failed to load matches");
         const data = (await r.json()) as ApiCombinedMatch[];
         setMatches(normalizeCombined(data));
@@ -217,7 +219,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/leagues")
+    apiFetch("/api/leagues")
       .then((r) => r.json())
       .then((data: Record<string, string[]>) => setLeagues(data))
       .catch(() => undefined);
@@ -284,7 +286,7 @@ export function App() {
 
     setLoadingStatsByKey((prev) => ({ ...prev, [row.matchKey]: true }));
     try {
-      const r = await fetch(`/api/forebet/match/${encodeURIComponent(row.matchKey)}`);
+      const r = await apiFetch(`/api/forebet/match/${encodeURIComponent(row.matchKey)}`);
       if (!r.ok) return;
       const stats = (await r.json()) as ForebetMatchStats;
       const { matchKey: _ignoredMatchKey, ...restStats } = stats;
@@ -314,7 +316,7 @@ export function App() {
 
     setLoadingDetails((prev) => ({ ...prev, [matchKey]: true }));
     try {
-      const r = await fetch(`/api/forebet/details/${encodeURIComponent(matchKey)}`);
+      const r = await apiFetch(`/api/forebet/details/${encodeURIComponent(matchKey)}`);
       const data = r.ok ? ((await r.json()) as ForebetDeepDetails) : null;
       setDetails((prev) => ({ ...prev, [matchKey]: data }));
     } catch {
@@ -356,8 +358,8 @@ export function App() {
     if (!text || chatSending) return;
 
     const now = new Date().toISOString();
-    const userMessage: ChatMessage = {
-      id: `${Date.now()}-u`,
+      const userMessage: ChatMessage = {
+        id: `${crypto.randomUUID()}`,
       role: "user",
       text,
       bot: botChoice,
@@ -369,7 +371,7 @@ export function App() {
     setChatSending(true);
 
     try {
-      const r = await fetch("/api/bot/chat", {
+      const r = await apiFetch("/api/bot/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -385,7 +387,7 @@ export function App() {
 
       const payload = (await r.json()) as { reply?: string };
       const assistantMessage: ChatMessage = {
-        id: `${Date.now()}-a`,
+        id: `${crypto.randomUUID()}`,
         role: "assistant",
         text: payload.reply?.trim() || "Bot did not return a response.",
         bot: botChoice,
@@ -394,7 +396,7 @@ export function App() {
       setChatMessages((prev) => [...prev, assistantMessage]);
     } catch {
       const assistantMessage: ChatMessage = {
-        id: `${Date.now()}-a`,
+        id: `${crypto.randomUUID()}`,
         role: "assistant",
         text: "Bot request failed. Please verify backend and provider settings.",
         bot: botChoice,
@@ -413,9 +415,9 @@ export function App() {
 
     try {
       const [forebetRes, olbgRes, vitibetRes] = await Promise.all([
-        fetch("/api/forebet/today"),
-        fetch("/api/olbg/today"),
-        fetch("/api/vitibet/today"),
+        apiFetch("/api/forebet/today"),
+        apiFetch("/api/olbg/today"),
+        apiFetch("/api/vitibet/today"),
       ]);
 
       if (!forebetRes.ok || !olbgRes.ok || !vitibetRes.ok) {
@@ -443,7 +445,7 @@ export function App() {
     setPairLoading(true);
 
     try {
-      const r = await fetch("/api/matches/pair-suggestions");
+      const r = await apiFetch("/api/matches/pair-suggestions");
       if (!r.ok) throw new Error("Failed to load pair suggestions");
       const data = (await r.json()) as PairSuggestion[];
       setPairSuggestions(data);
@@ -459,7 +461,7 @@ export function App() {
     setApprovingPairs((prev) => ({ ...prev, [key]: true }));
 
     try {
-      const r = await fetch("/api/matches/pair-suggestions/approve", {
+      const r = await apiFetch("/api/matches/pair-suggestions/approve", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -472,7 +474,7 @@ export function App() {
 
       setPairSuggestions((prev) => prev.filter((s) => !(s.source === item.source && s.candidateId === item.candidateId)));
 
-      const combinedRes = await fetch("/api/matches/combined");
+      const combinedRes = await apiFetch("/api/matches/combined");
       if (combinedRes.ok) {
         const refreshed = (await combinedRes.json()) as ApiCombinedMatch[];
         setMatches(normalizeCombined(refreshed));
@@ -541,6 +543,7 @@ export function App() {
             >
               {pairReviewOpen ? "Hide pair review" : "Review pairs"}
             </Button>
+            <LogoutButton />
           </Stack>
         </Stack>
 

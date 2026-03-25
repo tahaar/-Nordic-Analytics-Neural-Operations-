@@ -1,7 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 import { App } from "./App";
+import { LoginPage } from "./components/LoginPage";
+import { AuthCallback } from "./pages/AuthCallback";
+import { ProtectedRoute } from "./components/ProtectedRoute";
 
 const theme = createTheme({
   palette: {
@@ -23,7 +27,21 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <App />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/auth/logout-complete" element={<LoginPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute>
+                <App />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
     </ThemeProvider>
   </React.StrictMode>,
 );

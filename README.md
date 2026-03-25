@@ -71,6 +71,7 @@ Trigger policy:
 - Terraform modules for infra provisioning
 - Azure Storage for Terraform state
 - Step-by-step setup checklist: [Infrastructure Details](docs/infra.md)
+- Start from the security layer first: [Security Infra](security-infra/README.md)
 
 ## Security
 
@@ -116,9 +117,14 @@ Security docs:
 ## Getting Started
 
 1. Clone the repo
-2. Set up Azure credentials as GitHub secrets
-3. Run infra pipeline for initial setup
-4. Develop features and push to trigger deployments
+2. Create the security subscription / security control layer first
+3. Create Azure runtime resources and GitHub OIDC/secrets
+4. Run infra workflow manually where applicable
+5. Develop features and push to trigger deployments
+
+For Azure bootstrap and deployment:
+- [Infrastructure Details](docs/infra.md)
+- [Security Infra](security-infra/README.md)
 
 ## Project Structure
 

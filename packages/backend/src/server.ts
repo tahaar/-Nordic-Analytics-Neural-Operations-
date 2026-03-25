@@ -5,6 +5,7 @@ import { loadCacheFromDisk, saveCacheToDisk, getFromCache, setToCache } from "./
 import { DB } from "./db";
 import { reviewMatchAI } from "./ai";
 import type { MatchView, CombinedMatch } from "./types";
+import { requireAuth } from "./middleware/authMiddleware";
 import {
   approvePairSuggestion,
   getPairSuggestions,
@@ -19,6 +20,9 @@ import {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// All /api routes require a valid Entra ID token with AppUser role
+app.use("/api", requireAuth);
 
 const PORT = process.env.PORT || 3001;
 const CHAT_HISTORY_TTL_MS = 1000 * 60 * 60 * 24;
@@ -274,57 +278,82 @@ app.get("/api/bot/chat/:sessionId", (req: Request, res: Response) => {
 });
 
 app.get("/api/forebet/today", async (_req: Request, res: Response) => {
-  const data = await scrapeForebetToday();
-  res.json(data);
+  try {
+    const data = await scrapeForebetToday();
+    res.json(data);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to scrape Forebet", details: msg });
+  }
 });
 
 app.get("/api/forebet/match/:id", async (req: Request, res: Response) => {
-  const incoming = decodeURIComponent(req.params.id);
-  const today = await scrapeForebetToday();
-  const match = today.find((m) => m.id === incoming || toMatchKey(m) === incoming);
-  if (!match) return res.status(404).json({ error: "Match not found" });
+  try {
+    const incoming = decodeURIComponent(req.params.id);
+    const today = await scrapeForebetToday();
+    const match = today.find((m) => m.id === incoming || toMatchKey(m) === incoming);
+    if (!match) return res.status(404).json({ error: "Match not found" });
 
-  const details = await scrapeForebetMatchDetails(match.id, match.matchUrl);
-  res.json({
-    matchKey: toMatchKey(match),
-    xgHome: details.xg?.home,
-    xgAway: details.xg?.away,
-    shotsHome: details.shots?.home,
-    shotsAway: details.shots?.away,
-    possessionHome: details.possession?.home,
-    possessionAway: details.possession?.away,
-    formHome: details.form?.[0],
-    formAway: details.form?.[1],
-  });
+    const details = await scrapeForebetMatchDetails(match.id, match.matchUrl);
+    res.json({
+      matchKey: toMatchKey(match),
+      xgHome: details.xg?.home,
+      xgAway: details.xg?.away,
+      shotsHome: details.shots?.home,
+      shotsAway: details.shots?.away,
+      possessionHome: details.possession?.home,
+      possessionAway: details.possession?.away,
+      formHome: details.form?.[0],
+      formAway: details.form?.[1],
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to scrape Forebet match", details: msg });
+  }
 });
 
 app.get("/api/forebet/details/:matchKey", async (req: Request, res: Response) => {
   const matchKey = decodeURIComponent(req.params.matchKey);
   const cacheKey = `forebet:details:${matchKey}`;
 
-  const cached = getFromCache(cacheKey);
+  const cached = getFromCache<import("./types").ForebetDeepDetails>(cacheKey);
   if (cached) return res.json(cached);
 
-  const all = await scrapeCombinedMatches();
-  const match = all.find((m) => toMatchKey(m) === matchKey)?.forebet;
+  try {
+    const all = await scrapeCombinedMatches();
+    const match = all.find((m) => toMatchKey(m) === matchKey)?.forebet;
 
-  if (!match || !match.matchUrl) {
-    return res.status(404).json({ error: "Match not found or no link" });
+    if (!match || !match.matchUrl) {
+      return res.status(404).json({ error: "Match not found or no link" });
+    }
+
+    const details = await scrapeForebetMatchDeepDetails(match.matchUrl);
+    setToCache(cacheKey, details, 1000 * 60 * 20);
+    return res.json(details);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    return res.status(502).json({ error: "Failed to load deep details", details: msg });
   }
-
-  const details = await scrapeForebetMatchDeepDetails(match.matchUrl);
-  setToCache(cacheKey, details, 1000 * 60 * 20);
-  return res.json(details);
 });
 
 app.get("/api/olbg/today", async (_req: Request, res: Response) => {
-  const data = await scrapeOlbgToday();
-  res.json(data);
+  try {
+    const data = await scrapeOlbgToday();
+    res.json(data);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to scrape OLBG", details: msg });
+  }
 });
 
 app.get("/api/vitibet/today", async (_req: Request, res: Response) => {
-  const data = await scrapeVitibetToday();
-  res.json(data);
+  try {
+    const data = await scrapeVitibetToday();
+    res.json(data);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to scrape Vitibet", details: msg });
+  }
 });
 
 app.get("/api/matches/combined", async (_req: Request, res: Response) => {
@@ -336,7 +365,7 @@ app.get("/api/matches/combined", async (_req: Request, res: Response) => {
       id: row.id,
       homeTeam: row.homeTeam,
       awayTeam: row.awayTeam,
-      league: "unknown",
+      league: row.olbg?.league ?? row.vitibet?.league ?? "Unknown",
       kickoff: row.kickoffTime ?? "TBD",
       kickoffTime: row.kickoffTime,
       forebet: row.forebet,
@@ -350,12 +379,22 @@ app.get("/api/matches/combined", async (_req: Request, res: Response) => {
       }),
     };
   });
-  res.json(normalized);
+  try {
+    res.json(normalized);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to load combined matches", details: msg });
+  }
 });
 
 app.get("/api/matches/pair-suggestions", async (_req: Request, res: Response) => {
-  await scrapeCombinedMatches();
-  res.json(getPairSuggestions());
+  try {
+    await scrapeCombinedMatches();
+    res.json(getPairSuggestions());
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to load pair suggestions", details: msg });
+  }
 });
 
 app.post("/api/matches/pair-suggestions/approve", async (req: Request, res: Response) => {
@@ -366,6 +405,10 @@ app.post("/api/matches/pair-suggestions/approve", async (req: Request, res: Resp
 
   if (!source || !candidateId || !targetId) {
     return res.status(400).json({ error: "source, candidateId and targetId are required" });
+  }
+
+  if (source !== "olbg" && source !== "vitibet") {
+    return res.status(400).json({ error: "source must be 'olbg' or 'vitibet'" });
   }
 
   approvePairSuggestion(source, candidateId, targetId);
@@ -396,9 +439,14 @@ function groupLeaguesByCountry(matches: CombinedMatch[]): Record<string, string[
 }
 
 app.get("/api/leagues", async (_req: Request, res: Response) => {
-  const all = await scrapeCombinedMatches();
-  const grouped = groupLeaguesByCountry(all);
-  res.json(grouped);
+  try {
+    const all = await scrapeCombinedMatches();
+    const grouped = groupLeaguesByCountry(all);
+    res.json(grouped);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "scrape error";
+    res.status(502).json({ error: "Failed to load leagues", details: msg });
+  }
 });
 
 process.on("SIGTERM", () => {

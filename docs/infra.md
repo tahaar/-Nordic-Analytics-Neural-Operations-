@@ -1,5 +1,21 @@
 # Infrastructure Details
 
+## Status first
+- `infra/` is partially scaffolded and safe as a starting point, but the `container-apps` Terraform module is still a placeholder.
+- That means the repo is ready for controlled Azure setup and safe workflow wiring, but not yet a full one-click production platform from Terraform alone.
+- The app deployment workflow can still build and push images safely once Azure resources exist.
+
+## Recommended order: start from the security subscription
+Keep this order simple:
+1. Create or choose a separate security-oriented subscription or management scope.
+2. Create the guardrails there first: budget alerts, kill switch logic, locks, monitoring ownership.
+3. Create the application subscription and app resource group after that.
+4. Create Terraform state storage.
+5. Create ACR and Container Apps environment.
+6. Configure GitHub OIDC.
+7. Deploy images.
+8. Run infra workflow manually only after the above is understood and verified.
+
 ## Deployment model (current)
 - GitHub Actions builds container images from backend and frontend.
 - Images are pushed to Azure Container Registry (ACR).
@@ -24,6 +40,66 @@
 - `security-infra/` is the security and guardrail stack.
 - Recommended model: keep security controls in a dedicated security-oriented subscription or clearly separated management scope when possible.
 - That layer is responsible for kill switches, subscription-level controls, budget guardrails and related alerts.
+
+## Simple Azure bootstrap guide
+
+### Step 0: create the security subscription / management layer
+Goal:
+- Keep emergency controls outside the normal app deploy path.
+
+What to create:
+- A dedicated Azure subscription for security controls if possible.
+- If a separate subscription is not available, create at least a clearly separated resource group and ownership model for security resources.
+
+What belongs there:
+- Budget alerts
+- Monitoring ownership
+- Kill switch automation / runbooks
+- Read-only / containment procedures
+
+Minimum outcome before app deploy:
+- Someone knows who can trigger containment.
+- Cost alerts have an owner.
+- There is a documented stop procedure.
+
+### Step 1: create the app subscription resources
+In the application subscription create:
+- One resource group for the app platform
+- One resource group or storage account for Terraform state
+- One Azure Container Registry
+- One Container Apps environment
+- Backend and frontend Container Apps
+
+### Step 2: create Terraform state backend
+Create these Azure resources for remote state:
+- Resource group: for example `rg-nordic-tfstate`
+- Storage account: globally unique name, for example `nordictfstate001`
+- Blob container: for example `tfstate`
+
+These are later mapped to GitHub secrets:
+- `TFSTATE_RG`
+- `TFSTATE_STORAGE`
+- `TFSTATE_CONTAINER`
+
+### Step 3: create Azure Container Apps platform
+At minimum create:
+- Container Apps environment
+- Container App `backend`
+- Container App `frontend`
+- Ingress for frontend
+- Ingress for backend if frontend calls it directly from browser
+- ACR pull permissions for the apps
+
+Recommended first sizing for hobby use:
+- Backend: 0.25-0.5 vCPU, 0.5-1.0 Gi memory
+- Frontend: 0.25 vCPU, 0.5 Gi memory
+- Min replicas: 0 or 1 depending on whether cold starts are acceptable
+- Max replicas: start low, for example 1-2
+
+Memory note:
+- There is no obvious memory leak in the current app code from this repo snapshot, but the backend keeps an in-memory cache and can grow if large scrape payloads are retained for too long.
+- Keep memory limits small at first and monitor restart count plus memory working set.
+- Best practical starting point: set backend memory to 0.5 Gi or 1 Gi and alert on repeated restarts.
 
 Primary workflow:
 - [.github/workflows/app-containers.yml](.github/workflows/app-containers.yml)
@@ -83,6 +159,29 @@ Create these exact secrets (used by workflow):
 | `TFSTATE_STORAGE` | Terraform state storage account | Terraform init backend config |
 | `TFSTATE_CONTAINER` | Terraform state container (for example `tfstate`) | Terraform init backend config |
 
+Do not store these in the repo:
+- Any `.env` file with real values
+- `GEMINI_API_KEY`
+- ACR passwords
+- Token dumps or copied JWTs
+- Terraform state snapshots
+
+Repo safety note:
+- `.gitignore` already excludes `.env` files.
+- Keep using GitHub Actions secrets or Azure-managed secret stores for runtime values.
+
+Frontend build-time variables to set outside git:
+- `VITE_AZURE_TENANT_ID`
+- `VITE_AZURE_CLIENT_ID`
+
+Backend runtime variables to set outside git:
+- `AZURE_TENANT_ID`
+- `AZURE_CLIENT_ID`
+- `BOT_PROVIDER`
+- `GEMINI_API_KEY` if Gemini is used
+- `GEMINI_MODEL` optional
+- `CACHE_FILE` optional
+
 ## 3) Workflow values you must set
 In [.github/workflows/app-containers.yml](.github/workflows/app-containers.yml):
 - Ensure `AZURE_RESOURCE_GROUP` secret exists and points to the correct resource group.
@@ -107,6 +206,8 @@ Note:
 - Infra run validates that requested image tags already exist in ACR.
 - Images can be from today or older (for example week-old tags), as long as tags are present in registry.
 - Destroy does not require fresh images and skips image validation.
+- Because `infra/modules/container-apps/main.tf` is still a placeholder, do not assume Terraform alone creates the full app runtime yet unless you finish that module.
+- Safe approach today: create the core Azure runtime once, then let the app workflow update images.
 
 ## 5) Troubleshooting map (fast)
 - `unauthorized: authentication required` during image push:
@@ -132,6 +233,22 @@ Recommended minimum:
 	- `BOT_PROVIDER` (`affiliateplus` or `gemini`)
 	- `GEMINI_API_KEY` (if using Gemini)
 	- `GEMINI_MODEL` (optional override)
+
+Recommended security posture for runtime config:
+- Put sensitive values in Azure-managed secrets or GitHub Actions secrets, not source control.
+- Treat frontend `VITE_` variables as public configuration, not secrets.
+- Only backend-only values may be treated as secrets.
+
+## Minimal secure deployment checklist
+Before calling the app safely deployable, confirm these are true:
+1. Repo contains no real `.env` secrets, key files, or exported tokens.
+2. GitHub Actions uses OIDC and no long-lived Azure client secret.
+3. Backend API requires Entra token and `AppUser` role.
+4. Frontend sends bearer token only to `/api/*`.
+5. ACR credentials exist only in GitHub or Azure secret storage.
+6. Budget alerts and kill switch owner are defined.
+7. Container CPU and memory limits are set conservatively.
+8. Monitoring alerts exist for CPU, memory, restart count, and 5xx spikes.
 
 ## Alerting (platform level)
 Recommended alerts:
@@ -175,3 +292,10 @@ Main cost risks:
 - over-aggressive scaling
 - always-on higher CPU/memory profiles
 - accidental public traffic spikes
+
+## Short answer: is the repo safe to deploy?
+Yes, with normal small-project caution:
+- I do not see real secrets embedded in the repo snapshot.
+- Auth now exists on the backend path.
+- `.env` files are ignored.
+- The remaining risk is operational, not a clear secret leak in git: incomplete Terraform runtime definition, missing Azure-side setup, and making sure secrets stay in Actions/Azure rather than files.
