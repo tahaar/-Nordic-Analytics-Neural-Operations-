@@ -9,6 +9,17 @@ Nordic Analytics Neural Operations combines three betting tip sources (Forebet, 
 - Cache: In-memory + disk file (/data/cache.json)
 - Infra: Azure Container Apps + ACR + Terraform
 
+## Runtime controls
+- All `/api/*` routes require a valid Entra ID bearer token with the `AppUser` role.
+- Admin-only operational data is exposed via `GET /api/admin/memory` and requires the `Admin` role.
+- Backend cache persists to disk, drops expired entries on access/save, and exposes coarse cache metrics for operators.
+
+## Operational behavior
+- Normal end users interact with match, scraper and bot endpoints through the frontend.
+- Admin users get one extra operational surface in the frontend: an admin memory view backed by `GET /api/admin/memory`.
+- The backend cache is intentionally simple: in-memory first, optional disk persistence second, TTL-based expiry throughout.
+- This keeps the implementation understandable while still giving enough observability for a small Azure hobby deployment.
+
 ## Request flow
 1. Frontend calls `/api/matches/combined`.
 2. Backend fetches source data from scraper services.
@@ -35,5 +46,5 @@ Example combined row:
 
 ## Security baseline
 - Frontend login target: Entra ID (MFA via policy)
-- Backend: token validation planned/required before production
+- Backend: token validation and role enforcement active for `/api/*`
 - Infra controls: budget guardrails, kill switch, monitoring alerts

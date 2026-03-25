@@ -1,10 +1,52 @@
 import { authConfig } from "../authConfig";
 
+type JwtPayload = {
+  roles?: unknown;
+  role?: unknown;
+};
+
+function decodeBase64Url(value: string): string | null {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return atob(padded);
+  } catch {
+    return null;
+  }
+}
+
+function parseTokenPayload(token: string): JwtPayload | null {
+  const [, payload] = token.split(".");
+  if (!payload) return null;
+
+  const decoded = decodeBase64Url(payload);
+  if (!decoded) return null;
+
+  try {
+    return JSON.parse(decoded) as JwtPayload;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Returns the stored access token, or null if not logged in.
  */
 export function getAccessToken(): string | null {
   return sessionStorage.getItem("access_token");
+}
+
+export function getTokenRoles(): string[] {
+  const token = getAccessToken();
+  if (!token) return [];
+
+  const payload = parseTokenPayload(token);
+  const rawRoles = payload?.roles ?? payload?.role ?? [];
+  return Array.isArray(rawRoles) ? rawRoles.map(String) : [String(rawRoles)];
+}
+
+export function hasRole(role: string): boolean {
+  return getTokenRoles().includes(role);
 }
 
 /**

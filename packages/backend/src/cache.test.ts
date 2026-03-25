@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { getFromCache, setToCache } from "./cache";
+import { getCacheMetrics, getFromCache, setToCache } from "./cache";
 
 describe("cache", () => {
   it("returns cached value before ttl expires", () => {
@@ -21,6 +21,19 @@ describe("cache", () => {
     vi.setSystemTime(new Date("2026-01-01T10:00:02.000Z"));
 
     expect(getFromCache<string>("k2")).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("removes expired entries on read and reports metrics", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T10:00:00.000Z"));
+
+    setToCache("k3", { ok: true }, 1000);
+    vi.setSystemTime(new Date("2026-01-01T10:00:02.000Z"));
+
+    expect(getFromCache("k3")).toBeNull();
+    expect(getCacheMetrics().expiredEntries).toBe(0);
 
     vi.useRealTimers();
   });

@@ -1,9 +1,9 @@
 # Infrastructure Details
 
 ## Status first
-- `infra/` is partially scaffolded and safe as a starting point, but the `container-apps` Terraform module is still a placeholder.
-- That means the repo is ready for controlled Azure setup and safe workflow wiring, but not yet a full one-click production platform from Terraform alone.
-- The app deployment workflow can still build and push images safely once Azure resources exist.
+- `infra/modules/container-apps` now provisions a basic but working Azure Container Apps baseline.
+- The `networking` and `monitoring` modules are still placeholders, so infra is not fully production-complete from Terraform alone.
+- The app deployment workflow can still build and push images safely once Azure credentials and variable values are configured.
 
 ## Recommended order: start from the security subscription
 Keep this order simple:
@@ -24,6 +24,7 @@ Keep this order simple:
 ## What gets built
 - Azure Container Registry (ACR) stores backend and frontend images.
 - Azure Container Apps runs the frontend and backend workloads.
+- Log Analytics workspace is attached to the Container Apps environment.
 - Azure Monitor / Log Analytics collects platform telemetry and supports alerts.
 - Terraform state is stored in Azure Storage.
 - Security controls live in the separate `security-infra` stack and protect the app subscription.
@@ -86,6 +87,7 @@ At minimum create:
 - Container Apps environment
 - Container App `backend`
 - Container App `frontend`
+- Log Analytics workspace
 - Ingress for frontend
 - Ingress for backend if frontend calls it directly from browser
 - ACR pull permissions for the apps
@@ -97,9 +99,16 @@ Recommended first sizing for hobby use:
 - Max replicas: start low, for example 1-2
 
 Memory note:
-- There is no obvious memory leak in the current app code from this repo snapshot, but the backend keeps an in-memory cache and can grow if large scrape payloads are retained for too long.
+- Backend cache now prunes expired entries on reads and disk saves, and operators can inspect current cache/process memory from the admin endpoint.
 - Keep memory limits small at first and monitor restart count plus memory working set.
-- Best practical starting point: set backend memory to 0.5 Gi or 1 Gi and alert on repeated restarts.
+- The current Terraform defaults set backend memory to `1Gi` and frontend memory to `0.5Gi`.
+
+Practical operator workflow:
+1. Open the frontend as an admin user.
+2. Navigate to the Admin Memory tab.
+3. Check RSS, heap usage and cache entry count.
+4. If memory climbs unexpectedly, compare the admin view against Container Apps restart count and memory metrics.
+5. Reduce cache TTLs or container memory only after you have observed the pattern, not before.
 
 Primary workflow:
 - [.github/workflows/app-containers.yml](.github/workflows/app-containers.yml)
@@ -181,6 +190,7 @@ Backend runtime variables to set outside git:
 - `GEMINI_API_KEY` if Gemini is used
 - `GEMINI_MODEL` optional
 - `CACHE_FILE` optional
+- `PORT` optional if container target port differs from default
 
 ## 3) Workflow values you must set
 In [.github/workflows/app-containers.yml](.github/workflows/app-containers.yml):
@@ -206,8 +216,8 @@ Note:
 - Infra run validates that requested image tags already exist in ACR.
 - Images can be from today or older (for example week-old tags), as long as tags are present in registry.
 - Destroy does not require fresh images and skips image validation.
-- Because `infra/modules/container-apps/main.tf` is still a placeholder, do not assume Terraform alone creates the full app runtime yet unless you finish that module.
-- Safe approach today: create the core Azure runtime once, then let the app workflow update images.
+- `infra/modules/container-apps/main.tf` now creates the resource group, Log Analytics workspace, ACR, Container Apps environment, and `backend` / `frontend` apps.
+- Safe approach today: use Terraform for the baseline platform, then let the app workflow update images.
 
 ## 5) Troubleshooting map (fast)
 - `unauthorized: authentication required` during image push:
@@ -228,11 +238,22 @@ Note:
 Recommended minimum:
 - `PORT` for backend
 - `CACHE_FILE` for cache persistence path
+- `AZURE_TENANT_ID`
+- `AZURE_CLIENT_ID`
 - Entra/MSAL variables for frontend auth integration
 - Optional bot provider variables for backend chat:
 	- `BOT_PROVIDER` (`affiliateplus` or `gemini`)
 	- `GEMINI_API_KEY` (if using Gemini)
 	- `GEMINI_MODEL` (optional override)
+
+Role note:
+- All normal API calls require `AppUser`.
+- `GET /api/admin/memory` additionally requires `Admin`.
+
+Why this split exists:
+- `AppUser` is the baseline application role for all authenticated traffic.
+- `Admin` is reserved for operational visibility so regular users do not see runtime internals.
+- This keeps the authorization model simple and easy to explain in Entra ID app role configuration.
 
 Recommended security posture for runtime config:
 - Put sensitive values in Azure-managed secrets or GitHub Actions secrets, not source control.

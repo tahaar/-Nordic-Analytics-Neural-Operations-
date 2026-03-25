@@ -63,7 +63,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       const rawRoles = payload["roles"] ?? payload["role"] ?? [];
       const roles: string[] = Array.isArray(rawRoles) ? rawRoles : [String(rawRoles)];
 
-      if (!roles.includes("AppUser")) {
+      if (!hasRequiredRole(roles, "AppUser")) {
         res.status(403).json({ error: "Missing required role: AppUser" });
         return;
       }
@@ -78,4 +78,24 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       next();
     },
   );
+}
+
+export function hasRequiredRole(userRoles: string[], requiredRole: string): boolean {
+  return userRoles.some((role) => role === requiredRole);
+}
+
+export function requireRole(requiredRole: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ error: "Authentication required" });
+      return;
+    }
+
+    if (!hasRequiredRole(req.user.roles, requiredRole)) {
+      res.status(403).json({ error: `Missing required role: ${requiredRole}` });
+      return;
+    }
+
+    next();
+  };
 }

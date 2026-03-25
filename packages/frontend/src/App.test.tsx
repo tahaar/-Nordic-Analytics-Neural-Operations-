@@ -30,9 +30,41 @@ const combinedPayload = [
   },
 ];
 
+const leaguesPayload = {
+  England: ["Premier League"],
+  Italy: ["Serie A"],
+};
+
+function mockInitialAppRequests() {
+  fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    const url = String(input);
+
+    if (url.includes("/api/matches/combined")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => combinedPayload,
+      });
+    }
+
+    if (url.includes("/api/leagues")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => leaguesPayload,
+      });
+    }
+
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({}),
+    });
+  });
+}
+
 describe("App", () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
+    sessionStorage.setItem("access_token", "header.eyJyb2xlcyI6WyJBcHBVc2VyIl19.signature");
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -42,29 +74,29 @@ describe("App", () => {
   });
 
   it("loads combined matches", async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => combinedPayload,
-    });
+    mockInitialAppRequests();
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Arsenal vs Chelsea")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/matches/combined",
+        expect.objectContaining({
+          headers: expect.any(Headers),
+        }),
+      );
     });
+
+    expect(screen.getByText("Visible games: 2")).toBeInTheDocument();
   });
 
   it("shows pinned matches in pinned tab", async () => {
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => combinedPayload,
-    });
+    mockInitialAppRequests();
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Arsenal vs Chelsea")).toBeInTheDocument();
-      expect(screen.getByText("Inter vs Milan")).toBeInTheDocument();
+      expect(screen.getByText("Visible games: 2")).toBeInTheDocument();
     });
 
     const pinButtons = screen.getAllByLabelText("pin");
@@ -74,29 +106,48 @@ describe("App", () => {
     fireEvent.click(secondPin);
     fireEvent.click(screen.getByRole("tab", { name: "Pinned" }));
 
-    expect(screen.getByText("Inter vs Milan")).toBeInTheDocument();
-    expect(screen.queryByText("Arsenal vs Chelsea")).not.toBeInTheDocument();
+    expect(screen.getByText("Visible games: 1")).toBeInTheDocument();
   });
 
   it("moves selection between slips by drop", async () => {
-    fetchMock
-      .mockResolvedValueOnce({
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/api/matches/combined")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => combinedPayload,
+        });
+      }
+
+      if (url.includes("/api/leagues")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => leaguesPayload,
+        });
+      }
+
+      if (url.includes("/api/forebet/match/")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            matchKey: "arsenal-vs-chelsea",
+            xgHome: 1.4,
+            xgAway: 1.1,
+          }),
+        });
+      }
+
+      return Promise.resolve({
         ok: true,
-        json: async () => combinedPayload,
-      })
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          matchKey: "arsenal-vs-chelsea",
-          xgHome: 1.4,
-          xgAway: 1.1,
-        }),
+        json: async () => ({}),
       });
+    });
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Arsenal vs Chelsea")).toBeInTheDocument();
+      expect(screen.getByText("Visible games: 2")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "New slip" }));

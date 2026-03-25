@@ -31,8 +31,10 @@ import { MatchRow } from "./components/MatchRow";
 import { MatchFilters } from "./components/MatchFilters";
 import type { MatchFilterState } from "./components/MatchFilters";
 import { LogoutButton } from "./components/LogoutButton";
+import { AdminMemoryPanel } from "./components/AdminMemoryPanel";
 import { useBetslips } from "./hooks/useBetslips";
 import { usePinned } from "./hooks/usePinned";
+import { hasRole } from "./auth/authService";
 import { apiFetch } from "./services/apiFetch";
 import type {
   ApiCombinedMatch,
@@ -170,6 +172,7 @@ function sourceCount(row: CombinedMatchRow) {
 }
 
 export function App() {
+  const isAdmin = hasRole("Admin");
   const [matches, setMatches] = useState<CombinedMatchRow[]>([]);
   const [tab, setTab] = useState(0);
   const [loadingStatsByKey, setLoadingStatsByKey] = useState<Record<string, boolean>>({});
@@ -730,7 +733,10 @@ export function App() {
       <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Today" />
         <Tab label="Pinned" />
+        {isAdmin && <Tab label="Admin Memory" />}
       </Tabs>
+
+      {isAdmin && tab === 2 && <AdminMemoryPanel />}
 
       <Paper sx={{ p: 2, mb: 2, borderRadius: 3, border: "1px solid #d8e1e8" }}>
         <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }}>
@@ -769,7 +775,7 @@ export function App() {
         </Stack>
       </Paper>
 
-      {filteredMatches.map((row) => (
+      {tab !== 2 && filteredMatches.map((row) => (
         <MatchRow
           key={row.matchKey}
           row={row}
@@ -784,16 +790,16 @@ export function App() {
         />
       ))}
 
-      <Divider sx={{ my: 4 }} />
+      {tab !== 2 && <Divider sx={{ my: 4 }} />}
 
-      <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
+      {tab !== 2 && <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
         <Typography variant="h5">Betslips</Typography>
         <Button variant="contained" onClick={() => addSlip()}>
           New slip
         </Button>
-      </Stack>
+      </Stack>}
 
-      <Stack spacing={2}>
+      {tab !== 2 && <Stack spacing={2}>
         {slips.map((slip) => (
           <Paper
             key={slip.id}
@@ -852,7 +858,7 @@ export function App() {
             </Stack>
           </Paper>
         ))}
-      </Stack>
+      </Stack>}
     </Container>
   );
 }

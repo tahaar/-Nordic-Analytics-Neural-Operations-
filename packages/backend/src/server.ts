@@ -1,11 +1,10 @@
-import express from "express";
 import cors from "cors";
+import express from "express";
 import type { Request, Response } from "express";
-import { loadCacheFromDisk, saveCacheToDisk, getFromCache, setToCache } from "./cache";
-import { DB } from "./db";
 import { reviewMatchAI } from "./ai";
-import type { MatchView, CombinedMatch } from "./types";
-import { requireAuth } from "./middleware/authMiddleware";
+import { getCacheMetrics, getFromCache, loadCacheFromDisk, saveCacheToDisk, setToCache } from "./cache";
+import { DB } from "./db";
+import { requireAuth, requireRole } from "./middleware/authMiddleware";
 import {
   approvePairSuggestion,
   getPairSuggestions,
@@ -16,18 +15,10 @@ import {
   scrapeOlbgToday,
   scrapeVitibetToday,
 } from "./scrapers";
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// All /api routes require a valid Entra ID token with AppUser role
-app.use("/api", requireAuth);
+import type { CombinedMatch, MatchView } from "./types";
 
 const PORT = process.env.PORT || 3001;
 const CHAT_HISTORY_TTL_MS = 1000 * 60 * 60 * 24;
-
-loadCacheFromDisk();
 
 type ChatRole = "user" | "assistant";
 type ChatHistoryEntry = {
@@ -36,6 +27,7 @@ type ChatHistoryEntry = {
   bot: string;
   createdAt: string;
 };
+
 type ChatHistory = {
   sessionId: string;
   provider: string;
@@ -55,6 +47,7 @@ async function callAffiliatePlus(message: string, botName: string): Promise<stri
   if (!text) {
     throw new Error("AffiliatePlus returned empty message");
   }
+
   return text;
 }
 
@@ -87,6 +80,7 @@ async function callGemini(message: string): Promise<string> {
   if (!text) {
     throw new Error("Gemini returned empty text");
   }
+
   return text;
 }
 
@@ -116,6 +110,7 @@ function getChatHistory(sessionId: string): ChatHistory {
   const key = `chat:history:${sessionId}`;
   const cached = getFromCache<ChatHistory>(key);
   if (cached) return cached;
+
   return {
     sessionId,
     provider: "unknown",
@@ -219,208 +214,10 @@ async function getMatchView(matchId: string): Promise<MatchView | null> {
   return view;
 }
 
-app.get("/api/matches/:id", async (req: Request, res: Response) => {
-  const view = await getMatchView(req.params.id);
-  if (!view) return res.status(404).json({ error: "Not found" });
-  res.json(view);
-});
-
-app.post("/api/matches/:id/review", async (req: Request, res: Response) => {
-  const view = await getMatchView(req.params.id);
-  if (!view) return res.status(404).json({ error: "Not found" });
-  res.json(await reviewMatchAI(view));
-});
-
-app.post("/api/bot/chat", async (req: Request, res: Response) => {
-  const body = req.body as { sessionId?: string; bot?: string; message?: string };
-  const message = body.message?.trim();
-  if (!message) {
-    return res.status(400).json({ error: "message is required" });
-  }
-
-  const sessionId = body.sessionId?.trim() || "default";
-  const bot = body.bot?.trim() || "general";
-
-  try {
-    const { provider, reply } = await resolveBotReply(message, bot);
-    const history = getChatHistory(sessionId);
-    const now = new Date().toISOString();
-
-    const nextHistory: ChatHistory = {
-      sessionId,
-      provider,
-      updatedAt: now,
-      messages: [
-        ...history.messages,
-        { role: "user", text: message, bot, createdAt: now },
-        { role: "assistant", text: reply, bot, createdAt: now },
-      ],
-    };
-
-    storeChatHistory(nextHistory);
-
-    return res.json({
-      sessionId,
-      provider,
-      reply,
-      storedMessages: nextHistory.messages.length,
-    });
-  } catch (error) {
-    const details = error instanceof Error ? error.message : "Unknown bot error";
-    return res.status(502).json({ error: "Bot provider failed", details });
-  }
-});
-
-app.get("/api/bot/chat/:sessionId", (req: Request, res: Response) => {
-  const sessionId = decodeURIComponent(req.params.sessionId || "default");
-  const history = getChatHistory(sessionId);
-  res.json(history);
-});
-
-app.get("/api/forebet/today", async (_req: Request, res: Response) => {
-  try {
-    const data = await scrapeForebetToday();
-    res.json(data);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to scrape Forebet", details: msg });
-  }
-});
-
-app.get("/api/forebet/match/:id", async (req: Request, res: Response) => {
-  try {
-    const incoming = decodeURIComponent(req.params.id);
-    const today = await scrapeForebetToday();
-    const match = today.find((m) => m.id === incoming || toMatchKey(m) === incoming);
-    if (!match) return res.status(404).json({ error: "Match not found" });
-
-    const details = await scrapeForebetMatchDetails(match.id, match.matchUrl);
-    res.json({
-      matchKey: toMatchKey(match),
-      xgHome: details.xg?.home,
-      xgAway: details.xg?.away,
-      shotsHome: details.shots?.home,
-      shotsAway: details.shots?.away,
-      possessionHome: details.possession?.home,
-      possessionAway: details.possession?.away,
-      formHome: details.form?.[0],
-      formAway: details.form?.[1],
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to scrape Forebet match", details: msg });
-  }
-});
-
-app.get("/api/forebet/details/:matchKey", async (req: Request, res: Response) => {
-  const matchKey = decodeURIComponent(req.params.matchKey);
-  const cacheKey = `forebet:details:${matchKey}`;
-
-  const cached = getFromCache<import("./types").ForebetDeepDetails>(cacheKey);
-  if (cached) return res.json(cached);
-
-  try {
-    const all = await scrapeCombinedMatches();
-    const match = all.find((m) => toMatchKey(m) === matchKey)?.forebet;
-
-    if (!match || !match.matchUrl) {
-      return res.status(404).json({ error: "Match not found or no link" });
-    }
-
-    const details = await scrapeForebetMatchDeepDetails(match.matchUrl);
-    setToCache(cacheKey, details, 1000 * 60 * 20);
-    return res.json(details);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    return res.status(502).json({ error: "Failed to load deep details", details: msg });
-  }
-});
-
-app.get("/api/olbg/today", async (_req: Request, res: Response) => {
-  try {
-    const data = await scrapeOlbgToday();
-    res.json(data);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to scrape OLBG", details: msg });
-  }
-});
-
-app.get("/api/vitibet/today", async (_req: Request, res: Response) => {
-  try {
-    const data = await scrapeVitibetToday();
-    res.json(data);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to scrape Vitibet", details: msg });
-  }
-});
-
-app.get("/api/matches/combined", async (_req: Request, res: Response) => {
-  const data = await scrapeCombinedMatches();
-  const normalized = data.map((row) => {
-    const matchKey = toMatchKey(row);
-    return {
-      matchKey,
-      id: row.id,
-      homeTeam: row.homeTeam,
-      awayTeam: row.awayTeam,
-      league: row.olbg?.league ?? row.vitibet?.league ?? "Unknown",
-      kickoff: row.kickoffTime ?? "TBD",
-      kickoffTime: row.kickoffTime,
-      forebet: row.forebet,
-      olbg: row.olbg,
-      vitibet: row.vitibet,
-      tips: buildTipsFromCombined({
-        matchKey,
-        forebet: row.forebet,
-        olbg: row.olbg,
-        vitibet: row.vitibet,
-      }),
-    };
-  });
-  try {
-    res.json(normalized);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to load combined matches", details: msg });
-  }
-});
-
-app.get("/api/matches/pair-suggestions", async (_req: Request, res: Response) => {
-  try {
-    await scrapeCombinedMatches();
-    res.json(getPairSuggestions());
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to load pair suggestions", details: msg });
-  }
-});
-
-app.post("/api/matches/pair-suggestions/approve", async (req: Request, res: Response) => {
-  const body = req.body as { source?: "olbg" | "vitibet"; candidateId?: string; targetId?: string };
-  const source = body.source;
-  const candidateId = body.candidateId?.trim();
-  const targetId = body.targetId?.trim();
-
-  if (!source || !candidateId || !targetId) {
-    return res.status(400).json({ error: "source, candidateId and targetId are required" });
-  }
-
-  if (source !== "olbg" && source !== "vitibet") {
-    return res.status(400).json({ error: "source must be 'olbg' or 'vitibet'" });
-  }
-
-  approvePairSuggestion(source, candidateId, targetId);
-  await scrapeCombinedMatches();
-
-  return res.json({ ok: true });
-});
-
 function groupLeaguesByCountry(matches: CombinedMatch[]): Record<string, string[]> {
   const map: Record<string, Set<string>> = {};
-  for (const m of matches) {
-    const rawLeague = m.olbg?.league ?? m.vitibet?.league;
+  for (const match of matches) {
+    const rawLeague = match.olbg?.league ?? match.vitibet?.league;
     if (!rawLeague) continue;
 
     const parts = rawLeague.split(" - ");
@@ -432,26 +229,267 @@ function groupLeaguesByCountry(matches: CombinedMatch[]): Record<string, string[
   }
 
   const result: Record<string, string[]> = {};
-  for (const c of Object.keys(map)) {
-    result[c] = Array.from(map[c]!);
+  for (const country of Object.keys(map)) {
+    result[country] = Array.from(map[country] ?? []);
   }
+
   return result;
 }
 
-app.get("/api/leagues", async (_req: Request, res: Response) => {
-  try {
-    const all = await scrapeCombinedMatches();
-    const grouped = groupLeaguesByCountry(all);
-    res.json(grouped);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "scrape error";
-    res.status(502).json({ error: "Failed to load leagues", details: msg });
-  }
+export function createApp() {
+  const app = express();
+
+  app.use(cors());
+  app.use(express.json());
+
+  // All /api routes require a valid Entra ID token with AppUser role.
+  app.use("/api", requireAuth);
+
+  app.get("/api/matches/:id", async (req: Request, res: Response) => {
+    const view = await getMatchView(req.params.id);
+    if (!view) return res.status(404).json({ error: "Not found" });
+    res.json(view);
+  });
+
+  app.post("/api/matches/:id/review", async (req: Request, res: Response) => {
+    const view = await getMatchView(req.params.id);
+    if (!view) return res.status(404).json({ error: "Not found" });
+    res.json(await reviewMatchAI(view));
+  });
+
+  app.post("/api/bot/chat", async (req: Request, res: Response) => {
+    const body = req.body as { sessionId?: string; bot?: string; message?: string };
+    const message = body.message?.trim();
+    if (!message) {
+      return res.status(400).json({ error: "message is required" });
+    }
+
+    const sessionId = body.sessionId?.trim() || "default";
+    const bot = body.bot?.trim() || "general";
+
+    try {
+      const { provider, reply } = await resolveBotReply(message, bot);
+      const history = getChatHistory(sessionId);
+      const now = new Date().toISOString();
+
+      const nextHistory: ChatHistory = {
+        sessionId,
+        provider,
+        updatedAt: now,
+        messages: [
+          ...history.messages,
+          { role: "user", text: message, bot, createdAt: now },
+          { role: "assistant", text: reply, bot, createdAt: now },
+        ],
+      };
+
+      storeChatHistory(nextHistory);
+
+      return res.json({
+        sessionId,
+        provider,
+        reply,
+        storedMessages: nextHistory.messages.length,
+      });
+    } catch (error) {
+      const details = error instanceof Error ? error.message : "Unknown bot error";
+      return res.status(502).json({ error: "Bot provider failed", details });
+    }
+  });
+
+  app.get("/api/bot/chat/:sessionId", (req: Request, res: Response) => {
+    const sessionId = decodeURIComponent(req.params.sessionId || "default");
+    res.json(getChatHistory(sessionId));
+  });
+
+  app.get("/api/forebet/today", async (_req: Request, res: Response) => {
+    try {
+      res.json(await scrapeForebetToday());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to scrape Forebet", details: msg });
+    }
+  });
+
+  app.get("/api/forebet/match/:id", async (req: Request, res: Response) => {
+    try {
+      const incoming = decodeURIComponent(req.params.id);
+      const today = await scrapeForebetToday();
+      const match = today.find((item) => item.id === incoming || toMatchKey(item) === incoming);
+      if (!match) return res.status(404).json({ error: "Match not found" });
+
+      const details = await scrapeForebetMatchDetails(match.id, match.matchUrl);
+      res.json({
+        matchKey: toMatchKey(match),
+        xgHome: details.xg?.home,
+        xgAway: details.xg?.away,
+        shotsHome: details.shots?.home,
+        shotsAway: details.shots?.away,
+        possessionHome: details.possession?.home,
+        possessionAway: details.possession?.away,
+        formHome: details.form?.[0],
+        formAway: details.form?.[1],
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to scrape Forebet match", details: msg });
+    }
+  });
+
+  app.get("/api/forebet/details/:matchKey", async (req: Request, res: Response) => {
+    const matchKey = decodeURIComponent(req.params.matchKey);
+    const cacheKey = `forebet:details:${matchKey}`;
+
+    const cached = getFromCache<import("./types").ForebetDeepDetails>(cacheKey);
+    if (cached) return res.json(cached);
+
+    try {
+      const all = await scrapeCombinedMatches();
+      const match = all.find((item) => toMatchKey(item) === matchKey)?.forebet;
+
+      if (!match || !match.matchUrl) {
+        return res.status(404).json({ error: "Match not found or no link" });
+      }
+
+      const details = await scrapeForebetMatchDeepDetails(match.matchUrl);
+      setToCache(cacheKey, details, 1000 * 60 * 20);
+      return res.json(details);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      return res.status(502).json({ error: "Failed to load deep details", details: msg });
+    }
+  });
+
+  app.get("/api/olbg/today", async (_req: Request, res: Response) => {
+    try {
+      res.json(await scrapeOlbgToday());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to scrape OLBG", details: msg });
+    }
+  });
+
+  app.get("/api/vitibet/today", async (_req: Request, res: Response) => {
+    try {
+      res.json(await scrapeVitibetToday());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to scrape Vitibet", details: msg });
+    }
+  });
+
+  app.get("/api/matches/combined", async (_req: Request, res: Response) => {
+    try {
+      const data = await scrapeCombinedMatches();
+      const normalized = data.map((row) => {
+        const matchKey = toMatchKey(row);
+        return {
+          matchKey,
+          id: row.id,
+          homeTeam: row.homeTeam,
+          awayTeam: row.awayTeam,
+          league: row.olbg?.league ?? row.vitibet?.league ?? "Unknown",
+          kickoff: row.kickoffTime ?? "TBD",
+          kickoffTime: row.kickoffTime,
+          forebet: row.forebet,
+          olbg: row.olbg,
+          vitibet: row.vitibet,
+          tips: buildTipsFromCombined({
+            matchKey,
+            forebet: row.forebet,
+            olbg: row.olbg,
+            vitibet: row.vitibet,
+          }),
+        };
+      });
+
+      res.json(normalized);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to load combined matches", details: msg });
+    }
+  });
+
+  app.get("/api/matches/pair-suggestions", async (_req: Request, res: Response) => {
+    try {
+      await scrapeCombinedMatches();
+      res.json(getPairSuggestions());
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to load pair suggestions", details: msg });
+    }
+  });
+
+  app.post("/api/matches/pair-suggestions/approve", async (req: Request, res: Response) => {
+    const body = req.body as { source?: "olbg" | "vitibet"; candidateId?: string; targetId?: string };
+    const source = body.source;
+    const candidateId = body.candidateId?.trim();
+    const targetId = body.targetId?.trim();
+
+    if (!source || !candidateId || !targetId) {
+      return res.status(400).json({ error: "source, candidateId and targetId are required" });
+    }
+
+    if (source !== "olbg" && source !== "vitibet") {
+      return res.status(400).json({ error: "source must be 'olbg' or 'vitibet'" });
+    }
+
+    approvePairSuggestion(source, candidateId, targetId);
+    await scrapeCombinedMatches();
+    return res.json({ ok: true });
+  });
+
+  app.get("/api/admin/memory", requireRole("Admin"), (req: Request, res: Response) => {
+    const cache = getCacheMetrics();
+    const memoryUsage = process.memoryUsage();
+
+    res.json({
+      process: {
+        rssBytes: memoryUsage.rss,
+        heapTotalBytes: memoryUsage.heapTotal,
+        heapUsedBytes: memoryUsage.heapUsed,
+        externalBytes: memoryUsage.external,
+        arrayBuffersBytes: memoryUsage.arrayBuffers,
+        uptimeSeconds: Math.round(process.uptime()),
+        pid: process.pid,
+      },
+      cache,
+      user: {
+        sub: req.user?.sub ?? "unknown",
+        email: req.user?.email ?? null,
+        roles: req.user?.roles ?? [],
+      },
+      generatedAt: new Date().toISOString(),
+    });
+  });
+
+  app.get("/api/leagues", async (_req: Request, res: Response) => {
+    try {
+      const all = await scrapeCombinedMatches();
+      res.json(groupLeaguesByCountry(all));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "scrape error";
+      res.status(502).json({ error: "Failed to load leagues", details: msg });
+    }
+  });
+
+  return app;
+}
+
+loadCacheFromDisk();
+
+export const app = createApp();
+
+app.listen(PORT, () => {
+  console.log(`Backend listening on :${PORT}`);
+});
+
+process.on("SIGINT", () => {
+  saveCacheToDisk();
+  process.exit(0);
 });
 
 process.on("SIGTERM", () => {
   saveCacheToDisk();
   process.exit(0);
 });
-
-app.listen(PORT, () => console.log(`Backend running on ${PORT}`));

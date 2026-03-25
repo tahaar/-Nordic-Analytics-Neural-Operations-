@@ -2,6 +2,8 @@
 
 ## Endpoints
 
+All endpoints under `/api/*` require a bearer token. Most routes require the `AppUser` role. Admin routes additionally require the `Admin` role.
+
 ### GET /api/matches/combined
 Returns merged match rows from Forebet, OLBG and Vitibet.
 
@@ -54,6 +56,26 @@ Body:
 }
 ```
 
+### GET /api/admin/memory
+Returns backend process memory and cache metrics for operational debugging.
+
+What it returns in practice:
+- Process memory numbers from Node.js (`rss`, `heapUsed`, `heapTotal`, `external`, `arrayBuffers`)
+- Cache entry count, expired entry count, approximate serialized cache size, cache file path
+- The authenticated caller identity and roles seen by the backend
+- A generation timestamp for quick operator checks
+
+When to use it:
+- Backend memory looks suspicious in Azure Container Apps
+- You want to confirm cache growth is reasonable
+- You want to verify that an admin token is reaching the backend with the expected roles
+
+Quick example:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:3001/api/admin/memory | jq
+```
+
 ## Error format
 Backend returns JSON errors in this format:
 
@@ -65,3 +87,4 @@ Backend returns JSON errors in this format:
 - `matchKey` is the canonical ID for frontend row actions.
 - Backend also keeps source `id` for compatibility.
 - Forebet deep details scrape is only executed on explicit endpoint call.
+- `/api/admin/memory` is intentionally operational rather than end-user facing.

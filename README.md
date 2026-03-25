@@ -43,6 +43,7 @@ This monorepo contains a betting domain application built with:
 - Zod schema validation
 - Dependency injection
 - JWT token validation
+- Cache persistence with TTL pruning and admin memory metrics
 
 ### Shared Types
 - TypeScript interfaces for betting domain

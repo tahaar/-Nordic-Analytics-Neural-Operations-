@@ -158,3 +158,29 @@ export type PairSuggestion = {
   targetKickoffTime?: string;
   score: number;
 };
+
+export type AdminMemoryMetrics = {
+  process: {
+    rssBytes: number;
+    heapTotalBytes: number;
+    heapUsedBytes: number;
+    externalBytes: number;
+    arrayBuffersBytes: number;
+    uptimeSeconds: number;
+    pid: number;
+  };
+  cache: {
+    entries: number;
+    expiredEntries: number;
+    approximateBytes: number;
+    filePath: string;
+    loadedFromDiskAt: string | null;
+    lastSaveAt: string | null;
+  };
+  user: {
+    sub: string;
+    email: string | null;
+    roles: string[];
+  };
+  generatedAt: string;
+};
